@@ -22,6 +22,7 @@ from paths import (
     TAKEN_FILE,
     BINS_FILE,
 )
+from gui_table_viewer import TableViewer
 from storage import AccountDB
 import pipeline_runner
 
@@ -1130,530 +1131,244 @@ class PipelineGUI:
 
         self.root.after(100, self.update_logs)
 
+    # ------------------------------------------------------------------
+    # P2-3: единый TableViewer вместо 6 пар show_*/refresh_*.
+    #
+    # Каждый просмотрщик описывается тремя сущностями:
+    #   - title (что в title bar),
+    #   - columns = [(key, header, width), ...],
+    #   - loader () -> Sequence[tuple]  — функция выкачки данных.
+    #
+    # Раньше в этом классе было ~525 строк дублирующейся логики
+    # «открыть Toplevel → создать Treeview со скроллом → запросить БД →
+    #  заполнить → кнопки Обновить/Закрыть» с шестью почти идентичными
+    # show_X и шестью refresh_X. Теперь — компактные вызовы TableViewer.
+    # ------------------------------------------------------------------
+
+    def _load_db_rows(self):
+        db = self._db
+        conn = db._get_conn()
+        cursor = conn.execute("""
+            SELECT email, password, nick, devin_status, identity_name
+            FROM accounts
+            ORDER BY created_at DESC
+        """)
+        return [
+            (
+                row["email"] or "",
+                row["password"] or "",
+                row["nick"] or "",
+                row["devin_status"] or "",
+                row["identity_name"] or "",
+            )
+            for row in cursor.fetchall()
+        ]
+
+    def _load_emails_rows(self):
+        db = self._db
+        conn = db._get_conn()
+        cursor = conn.execute("""
+            SELECT email, password, nick, pinmx_created_at
+            FROM accounts
+            WHERE email IS NOT NULL
+            ORDER BY pinmx_created_at DESC
+        """)
+        return [
+            (
+                row["email"] or "",
+                row["password"] or "",
+                row["nick"] or "",
+                row["pinmx_created_at"] or "",
+            )
+            for row in cursor.fetchall()
+        ]
+
+    def _load_devin_rows(self):
+        db = self._db
+        conn = db._get_conn()
+        cursor = conn.execute("""
+            SELECT email, password, devin_status, devin_registered_at
+            FROM accounts
+            WHERE devin_status IS NOT NULL
+            ORDER BY devin_registered_at DESC
+        """)
+        return [
+            (
+                row["email"] or "",
+                row["password"] or "",
+                row["devin_status"] or "",
+                row["devin_registered_at"] or "",
+            )
+            for row in cursor.fetchall()
+        ]
+
+    def _load_identities_rows(self):
+        db = self._db
+        conn = db._get_conn()
+        cursor = conn.execute("""
+            SELECT email, identity_name, identity_address
+            FROM accounts
+            WHERE identity_name IS NOT NULL
+            ORDER BY created_at DESC
+        """)
+        return [
+            (
+                row["email"] or "",
+                row["identity_name"] or "",
+                row["identity_address"] or "",
+            )
+            for row in cursor.fetchall()
+        ]
+
+    def _load_cards_rows(self):
+        db = self._db
+        conn = db._get_conn()
+        cursor = conn.execute("""
+            SELECT card_number, exp_month, exp_year, cvv, bin, status, checked_at
+            FROM cards
+            WHERE status IN ('live', 'confirmed')
+            ORDER BY checked_at DESC
+        """)
+        return [
+            (
+                row["card_number"] or "",
+                f"{row['exp_month']}/{row['exp_year']}" if row["exp_month"] else "",
+                row["cvv"] or "",
+                row["bin"] or "",
+                row["status"] or "",
+                row["checked_at"] or "",
+            )
+            for row in cursor.fetchall()
+        ]
+
+    def _load_activated_rows(self):
+        db = self._db
+        conn = db._get_conn()
+        cursor = conn.execute("""
+            SELECT email, card, holder_name, activated_at
+            FROM activated_accounts
+            ORDER BY activated_at DESC
+        """)
+        return [
+            (
+                row["email"] or "",
+                row["card"] or "",
+                row["holder_name"] or "",
+                row["activated_at"] or "",
+            )
+            for row in cursor.fetchall()
+        ]
+
     def show_database(self):
-        db_window = tk.Toplevel(self.root)
-        db_window.title("Database Viewer")
-        db_window.geometry("1000x600")
-
-        # Treeview
-        tree_frame = ttk.Frame(db_window)
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        columns = ('email', 'password', 'nick', 'devin_status', 'identity_name')
-        tree = ttk.Treeview(tree_frame, columns=columns, show='headings')
-
-        tree.heading('email', text='Email')
-        tree.heading('password', text='Password')
-        tree.heading('nick', text='Nick')
-        tree.heading('devin_status', text='Devin Status')
-        tree.heading('identity_name', text='Identity')
-
-        tree.column('email', width=200)
-        tree.column('password', width=150)
-        tree.column('nick', width=150)
-        tree.column('devin_status', width=100)
-        tree.column('identity_name', width=200)
-
-        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
-        tree.configure(yscroll=scrollbar.set)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        # Load data
-        try:
-            db = self._db
-            conn = db._get_conn()
-            cursor = conn.execute("""
-                SELECT email, password, nick, devin_status, identity_name
-                FROM accounts
-                ORDER BY created_at DESC
-            """)
-
-            for row in cursor.fetchall():
-                tree.insert('', tk.END, values=(
-                    row['email'] or '',
-                    row['password'] or '',
-                    row['nick'] or '',
-                    row['devin_status'] or '',
-                    row['identity_name'] or ''
-                ))
-
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось загрузить данные: {e}")
-
-        # Buttons
-        btn_frame = ttk.Frame(db_window)
-        btn_frame.pack(fill=tk.X, padx=10, pady=5)
-
-        ttk.Button(btn_frame, text="Обновить", command=lambda: self.refresh_db_view(tree)).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Закрыть", command=db_window.destroy).pack(side=tk.RIGHT, padx=5)
+        TableViewer(
+            self.root,
+            title="Database Viewer",
+            geometry="1000x600",
+            columns=[
+                ("email", "Email", 200),
+                ("password", "Password", 150),
+                ("nick", "Nick", 150),
+                ("devin_status", "Devin Status", 100),
+                ("identity_name", "Identity", 200),
+            ],
+            loader=self._load_db_rows,
+        )
 
     def show_emails(self):
-        """Показать список созданных email аккаунтов."""
-        window = tk.Toplevel(self.root)
-        window.title("Email аккаунты")
-        window.geometry("900x600")
-
-        tree_frame = ttk.Frame(window)
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        columns = ('email', 'password', 'nick', 'created_at')
-        tree = ttk.Treeview(tree_frame, columns=columns, show='headings')
-
-        tree.heading('email', text='Email')
-        tree.heading('password', text='Password')
-        tree.heading('nick', text='Nick')
-        tree.heading('created_at', text='Создан')
-
-        tree.column('email', width=250)
-        tree.column('password', width=150)
-        tree.column('nick', width=150)
-        tree.column('created_at', width=200)
-
-        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
-        tree.configure(yscroll=scrollbar.set)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        try:
-            db = self._db
-            conn = db._get_conn()
-            cursor = conn.execute("""
-                SELECT email, password, nick, pinmx_created_at
-                FROM accounts
-                WHERE email IS NOT NULL
-                ORDER BY pinmx_created_at DESC
-            """)
-
-            for row in cursor.fetchall():
-                tree.insert('', tk.END, values=(
-                    row['email'] or '',
-                    row['password'] or '',
-                    row['nick'] or '',
-                    row['pinmx_created_at'] or ''
-                ))
-
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось загрузить данные: {e}")
-
-        btn_frame = ttk.Frame(window)
-        btn_frame.pack(fill=tk.X, padx=10, pady=5)
-
-        ttk.Label(btn_frame, text=f"Всего: {len(tree.get_children())} аккаунтов").pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Обновить", command=lambda: self.refresh_emails_view(tree, btn_frame)).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Закрыть", command=window.destroy).pack(side=tk.RIGHT, padx=5)
-
-    def refresh_emails_view(self, tree, btn_frame):
-        """Обновить список email аккаунтов."""
-        for item in tree.get_children():
-            tree.delete(item)
-
-        try:
-            db = self._db
-            conn = db._get_conn()
-            cursor = conn.execute("""
-                SELECT email, password, nick, pinmx_created_at
-                FROM accounts
-                WHERE email IS NOT NULL
-                ORDER BY pinmx_created_at DESC
-            """)
-
-            for row in cursor.fetchall():
-                tree.insert('', tk.END, values=(
-                    row['email'] or '',
-                    row['password'] or '',
-                    row['nick'] or '',
-                    row['pinmx_created_at'] or ''
-                ))
-
-
-            # Обновить счетчик
-            for widget in btn_frame.winfo_children():
-                if isinstance(widget, ttk.Label):
-                    widget.config(text=f"Всего: {len(tree.get_children())} аккаунтов")
-                    break
-
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось обновить данные: {e}")
+        TableViewer(
+            self.root,
+            title="Email аккаунты",
+            geometry="900x600",
+            columns=[
+                ("email", "Email", 250),
+                ("password", "Password", 150),
+                ("nick", "Nick", 150),
+                ("created_at", "Создан", 200),
+            ],
+            loader=self._load_emails_rows,
+            status_text=lambda n: f"Всего: {n} аккаунтов",
+        )
 
     def show_devin_accounts(self):
-        """Показать список зарегистрированных Devin аккаунтов."""
-        window = tk.Toplevel(self.root)
-        window.title("Devin аккаунты")
-        window.geometry("900x600")
+        def status_text(rows_count: int) -> str:
+            # success-счётчик пересчитывается отдельно, т.к. зависит от
+            # значений колонки status, которые TableViewer не выставляет.
+            success = 0
+            try:
+                rows = self._load_devin_rows()
+                success = sum(1 for r in rows if r[2] == "success")
+            except Exception:
+                pass
+            return f"Всего: {rows_count} (успешно: {success})"
 
-        tree_frame = ttk.Frame(window)
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        columns = ('email', 'password', 'status', 'registered_at')
-        tree = ttk.Treeview(tree_frame, columns=columns, show='headings')
-
-        tree.heading('email', text='Email')
-        tree.heading('password', text='Password')
-        tree.heading('status', text='Status')
-        tree.heading('registered_at', text='Зарегистрирован')
-
-        tree.column('email', width=250)
-        tree.column('password', width=150)
-        tree.column('status', width=100)
-        tree.column('registered_at', width=200)
-
-        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
-        tree.configure(yscroll=scrollbar.set)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        try:
-            db = self._db
-            conn = db._get_conn()
-            cursor = conn.execute("""
-                SELECT email, password, devin_status, devin_registered_at
-                FROM accounts
-                WHERE devin_status IS NOT NULL
-                ORDER BY devin_registered_at DESC
-            """)
-
-            for row in cursor.fetchall():
-                tree.insert('', tk.END, values=(
-                    row['email'] or '',
-                    row['password'] or '',
-                    row['devin_status'] or '',
-                    row['devin_registered_at'] or ''
-                ))
-
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось загрузить данные: {e}")
-
-        btn_frame = ttk.Frame(window)
-        btn_frame.pack(fill=tk.X, padx=10, pady=5)
-
-        success_count = sum(1 for item in tree.get_children() if tree.item(item)['values'][2] == 'success')
-        ttk.Label(btn_frame, text=f"Всего: {len(tree.get_children())} (успешно: {success_count})").pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Обновить", command=lambda: self.refresh_devin_view(tree, btn_frame)).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Закрыть", command=window.destroy).pack(side=tk.RIGHT, padx=5)
-
-    def refresh_devin_view(self, tree, btn_frame):
-        """Обновить список Devin аккаунтов."""
-        for item in tree.get_children():
-            tree.delete(item)
-
-        try:
-            db = self._db
-            conn = db._get_conn()
-            cursor = conn.execute("""
-                SELECT email, password, devin_status, devin_registered_at
-                FROM accounts
-                WHERE devin_status IS NOT NULL
-                ORDER BY devin_registered_at DESC
-            """)
-
-            for row in cursor.fetchall():
-                tree.insert('', tk.END, values=(
-                    row['email'] or '',
-                    row['password'] or '',
-                    row['devin_status'] or '',
-                    row['devin_registered_at'] or ''
-                ))
-
-
-            success_count = sum(1 for item in tree.get_children() if tree.item(item)['values'][2] == 'success')
-            for widget in btn_frame.winfo_children():
-                if isinstance(widget, ttk.Label):
-                    widget.config(text=f"Всего: {len(tree.get_children())} (успешно: {success_count})")
-                    break
-
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось обновить данные: {e}")
+        TableViewer(
+            self.root,
+            title="Devin аккаунты",
+            geometry="900x600",
+            columns=[
+                ("email", "Email", 250),
+                ("password", "Password", 150),
+                ("status", "Status", 100),
+                ("registered_at", "Зарегистрирован", 200),
+            ],
+            loader=self._load_devin_rows,
+            status_text=status_text,
+        )
 
     def show_identities(self):
-        """Показать список сгенерированных личностей."""
-        window = tk.Toplevel(self.root)
-        window.title("Личности")
-        window.geometry("1000x600")
-
-        tree_frame = ttk.Frame(window)
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        columns = ('email', 'name', 'address')
-        tree = ttk.Treeview(tree_frame, columns=columns, show='headings')
-
-        tree.heading('email', text='Email')
-        tree.heading('name', text='Имя')
-        tree.heading('address', text='Адрес')
-
-        tree.column('email', width=250)
-        tree.column('name', width=200)
-        tree.column('address', width=400)
-
-        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
-        tree.configure(yscroll=scrollbar.set)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        try:
-            db = self._db
-            conn = db._get_conn()
-            cursor = conn.execute("""
-                SELECT email, identity_name, identity_address
-                FROM accounts
-                WHERE identity_name IS NOT NULL
-                ORDER BY created_at DESC
-            """)
-
-            for row in cursor.fetchall():
-                tree.insert('', tk.END, values=(
-                    row['email'] or '',
-                    row['identity_name'] or '',
-                    row['identity_address'] or ''
-                ))
-
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось загрузить данные: {e}")
-
-        btn_frame = ttk.Frame(window)
-        btn_frame.pack(fill=tk.X, padx=10, pady=5)
-
-        ttk.Label(btn_frame, text=f"Всего: {len(tree.get_children())} личностей").pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Обновить", command=lambda: self.refresh_identities_view(tree, btn_frame)).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Закрыть", command=window.destroy).pack(side=tk.RIGHT, padx=5)
-
-    def refresh_identities_view(self, tree, btn_frame):
-        """Обновить список личностей."""
-        for item in tree.get_children():
-            tree.delete(item)
-
-        try:
-            db = self._db
-            conn = db._get_conn()
-            cursor = conn.execute("""
-                SELECT email, identity_name, identity_address
-                FROM accounts
-                WHERE identity_name IS NOT NULL
-                ORDER BY created_at DESC
-            """)
-
-            for row in cursor.fetchall():
-                tree.insert('', tk.END, values=(
-                    row['email'] or '',
-                    row['identity_name'] or '',
-                    row['identity_address'] or ''
-                ))
-
-
-            for widget in btn_frame.winfo_children():
-                if isinstance(widget, ttk.Label):
-                    widget.config(text=f"Всего: {len(tree.get_children())} личностей")
-                    break
-
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось обновить данные: {e}")
+        TableViewer(
+            self.root,
+            title="Личности",
+            geometry="1000x600",
+            columns=[
+                ("email", "Email", 250),
+                ("name", "Имя", 200),
+                ("address", "Адрес", 400),
+            ],
+            loader=self._load_identities_rows,
+            status_text=lambda n: f"Всего: {n} личностей",
+        )
 
     def show_live_cards(self):
-        """Показать список живых карт."""
-        window = tk.Toplevel(self.root)
-        window.title("Живые карты")
-        window.geometry("1000x600")
+        def status_text(rows_count: int) -> str:
+            confirmed = 0
+            try:
+                rows = self._load_cards_rows()
+                confirmed = sum(1 for r in rows if r[4] == "confirmed")
+            except Exception:
+                pass
+            return f"Всего: {rows_count} (подтверждено: {confirmed})"
 
-        tree_frame = ttk.Frame(window)
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        columns = ('card_number', 'exp', 'cvv', 'bin', 'status', 'checked_at')
-        tree = ttk.Treeview(tree_frame, columns=columns, show='headings')
-
-        tree.heading('card_number', text='Номер карты')
-        tree.heading('exp', text='Срок')
-        tree.heading('cvv', text='CVV')
-        tree.heading('bin', text='BIN')
-        tree.heading('status', text='Статус')
-        tree.heading('checked_at', text='Проверена')
-
-        tree.column('card_number', width=200)
-        tree.column('exp', width=80)
-        tree.column('cvv', width=60)
-        tree.column('bin', width=100)
-        tree.column('status', width=100)
-        tree.column('checked_at', width=200)
-
-        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
-        tree.configure(yscroll=scrollbar.set)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        try:
-            db = self._db
-            conn = db._get_conn()
-            cursor = conn.execute("""
-                SELECT card_number, exp_month, exp_year, cvv, bin, status, checked_at
-                FROM cards
-                WHERE status IN ('live', 'confirmed')
-                ORDER BY checked_at DESC
-            """)
-
-            for row in cursor.fetchall():
-                tree.insert('', tk.END, values=(
-                    row['card_number'] or '',
-                    f"{row['exp_month']}/{row['exp_year']}" if row['exp_month'] else '',
-                    row['cvv'] or '',
-                    row['bin'] or '',
-                    row['status'] or '',
-                    row['checked_at'] or ''
-                ))
-
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось загрузить данные: {e}")
-
-        btn_frame = ttk.Frame(window)
-        btn_frame.pack(fill=tk.X, padx=10, pady=5)
-
-        confirmed_count = sum(1 for item in tree.get_children() if tree.item(item)['values'][4] == 'confirmed')
-        ttk.Label(btn_frame, text=f"Всего: {len(tree.get_children())} (подтверждено: {confirmed_count})").pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Обновить", command=lambda: self.refresh_cards_view(tree, btn_frame)).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Закрыть", command=window.destroy).pack(side=tk.RIGHT, padx=5)
-
-    def refresh_cards_view(self, tree, btn_frame):
-        """Обновить список карт."""
-        for item in tree.get_children():
-            tree.delete(item)
-
-        try:
-            db = self._db
-            conn = db._get_conn()
-            cursor = conn.execute("""
-                SELECT card_number, exp_month, exp_year, cvv, bin, status, checked_at
-                FROM cards
-                WHERE status IN ('live', 'confirmed')
-                ORDER BY checked_at DESC
-            """)
-
-            for row in cursor.fetchall():
-                tree.insert('', tk.END, values=(
-                    row['card_number'] or '',
-                    f"{row['exp_month']}/{row['exp_year']}" if row['exp_month'] else '',
-                    row['cvv'] or '',
-                    row['bin'] or '',
-                    row['status'] or '',
-                    row['checked_at'] or ''
-                ))
-
-
-            confirmed_count = sum(1 for item in tree.get_children() if tree.item(item)['values'][4] == 'confirmed')
-            for widget in btn_frame.winfo_children():
-                if isinstance(widget, ttk.Label):
-                    widget.config(text=f"Всего: {len(tree.get_children())} (подтверждено: {confirmed_count})")
-                    break
-
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось обновить данные: {e}")
+        TableViewer(
+            self.root,
+            title="Живые карты",
+            geometry="1000x600",
+            columns=[
+                ("card_number", "Номер карты", 200),
+                ("exp", "Срок", 80),
+                ("cvv", "CVV", 60),
+                ("bin", "BIN", 100),
+                ("status", "Статус", 100),
+                ("checked_at", "Проверена", 200),
+            ],
+            loader=self._load_cards_rows,
+            status_text=status_text,
+        )
 
     def show_activated_trials(self):
-        """Показать список активированных триалов."""
-        window = tk.Toplevel(self.root)
-        window.title("Активированные триалы")
-        window.geometry("1000x600")
-
-        tree_frame = ttk.Frame(window)
-        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        columns = ('email', 'card', 'holder_name', 'activated_at')
-        tree = ttk.Treeview(tree_frame, columns=columns, show='headings')
-
-        tree.heading('email', text='Email')
-        tree.heading('card', text='Карта')
-        tree.heading('holder_name', text='Имя держателя')
-        tree.heading('activated_at', text='Активирован')
-
-        tree.column('email', width=250)
-        tree.column('card', width=250)
-        tree.column('holder_name', width=200)
-        tree.column('activated_at', width=200)
-
-        scrollbar = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=tree.yview)
-        tree.configure(yscroll=scrollbar.set)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        try:
-            db = self._db
-            conn = db._get_conn()
-            cursor = conn.execute("""
-                SELECT email, card, holder_name, activated_at
-                FROM activated_accounts
-                ORDER BY activated_at DESC
-            """)
-
-            for row in cursor.fetchall():
-                tree.insert('', tk.END, values=(
-                    row['email'] or '',
-                    row['card'] or '',
-                    row['holder_name'] or '',
-                    row['activated_at'] or ''
-                ))
-
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось загрузить данные: {e}")
-
-        btn_frame = ttk.Frame(window)
-        btn_frame.pack(fill=tk.X, padx=10, pady=5)
-
-        ttk.Label(btn_frame, text=f"Всего: {len(tree.get_children())} активированных триалов").pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Обновить", command=lambda: self.refresh_activated_view(tree, btn_frame)).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Закрыть", command=window.destroy).pack(side=tk.RIGHT, padx=5)
-
-    def refresh_activated_view(self, tree, btn_frame):
-        """Обновить список активированных триалов."""
-        for item in tree.get_children():
-            tree.delete(item)
-
-        try:
-            db = self._db
-            conn = db._get_conn()
-            cursor = conn.execute("""
-                SELECT email, card, holder_name, activated_at
-                FROM activated_accounts
-                ORDER BY activated_at DESC
-            """)
-
-            for row in cursor.fetchall():
-                tree.insert('', tk.END, values=(
-                    row['email'] or '',
-                    row['card'] or '',
-                    row['holder_name'] or '',
-                    row['activated_at'] or ''
-                ))
-
-
-            for widget in btn_frame.winfo_children():
-                if isinstance(widget, ttk.Label):
-                    widget.config(text=f"Всего: {len(tree.get_children())} активированных триалов")
-                    break
-
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось обновить данные: {e}")
-
-    def refresh_db_view(self, tree):
-        for item in tree.get_children():
-            tree.delete(item)
-
-        try:
-            db = self._db
-            conn = db._get_conn()
-            cursor = conn.execute("""
-                SELECT email, password, nick, devin_status, identity_name
-                FROM accounts
-                ORDER BY created_at DESC
-            """)
-
-            for row in cursor.fetchall():
-                tree.insert('', tk.END, values=(
-                    row['email'] or '',
-                    row['password'] or '',
-                    row['nick'] or '',
-                    row['devin_status'] or '',
-                    row['identity_name'] or ''
-                ))
-
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось обновить данные: {e}")
+        TableViewer(
+            self.root,
+            title="Активированные триалы",
+            geometry="1000x600",
+            columns=[
+                ("email", "Email", 250),
+                ("card", "Карта", 250),
+                ("holder_name", "Имя держателя", 200),
+                ("activated_at", "Активирован", 200),
+            ],
+            loader=self._load_activated_rows,
+            status_text=lambda n: f"Всего: {n} активированных триалов",
+        )
 
     def export_txt(self):
         try:
