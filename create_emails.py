@@ -49,6 +49,7 @@ import ddddocr
 from playwright.sync_api import Page, TimeoutError as PWTimeout, sync_playwright
 
 from browser_modes import add_browser_mode_arg, launch_browser
+from config import PINMX_URL as _CFG_PINMX_URL
 from logging_utils import setup_logging, log_step, log_exception, log_timing
 from paths import (
     CAPTCHA_DEBUG_DIR,
@@ -69,7 +70,8 @@ RESULTS_PATH = EMAILS_FILE
 TAKEN_PATH = TAKEN_FILE
 DB_PATH = DB_FILE
 DEBUG_DIR = CAPTCHA_DEBUG_DIR
-URL = "https://www.pinmx.com/ru"
+# P2-8: URL в config.py (переопределяется через ENV QQQ_PINMX_URL).
+URL = _CFG_PINMX_URL
 WANTED_SUFFIX = "@pingmx.com"
 
 # Лимиты повторов в одной попытке регистрации

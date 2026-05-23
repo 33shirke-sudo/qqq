@@ -30,6 +30,10 @@ from playwright.sync_api import (
 )
 
 from browser_modes import add_browser_mode_arg
+from config import (
+    DEVIN_SIGNUP_URL as _CFG_DEVIN_SIGNUP_URL,
+    MAIL_LOGIN_URL as _CFG_MAIL_LOGIN_URL,
+)
 from logging_utils import setup_logging, log_exception
 from paths import (
     DB_FILE,
@@ -63,14 +67,15 @@ DB_PATH = DB_FILE
 # на отдельную страницу ``/mail/index.html`` (это rainloop, не SPA с хешем).
 # Хеш-маршрут после входа отсутствует, поэтому ``MAIL_INBOX_URL_HASH`` —
 # фактически часть URL-пути, по которой мы понимаем, что вход успешен.
-MAIL_LOGIN_URL = "https://mail-client.pinmx.com/"
+# P2-8: URL-ы в config.py (можно переопределить через ENV QQQ_*).
+MAIL_LOGIN_URL = _CFG_MAIL_LOGIN_URL
 MAIL_INBOX_URL_HASH = "/mail/"
 
 # URL страницы регистрации Devin. Берём именно ``/auth/signup``, а не корень
 # ``app.devin.ai`` — корень редиректит на лендинг и просит залогиниться,
 # тогда как форма «Email address + Sign up» живёт по этому пути напрямую
 # (см. design.md → Investigation → ``app.devin.ai/auth/signup``).
-DEVIN_SIGNUP_URL = "https://app.devin.ai/auth/signup"
+DEVIN_SIGNUP_URL = _CFG_DEVIN_SIGNUP_URL
 
 # Кнопка «обновить список писем». В rainloop она помечена двумя стабильными
 # признаками: классом ``buttonReload`` и привязкой ``command: reloadCommand``.

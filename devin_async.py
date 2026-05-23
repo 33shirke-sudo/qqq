@@ -42,7 +42,13 @@ from register_devin import (
     IDENTITIES_PATH,
 )
 
-DEVIN_LOGIN_URL = "https://app.devin.ai/auth/login"
+# P2-8: URL в config.py (переопределяется через ENV QQQ_DEVIN_LOGIN_URL).
+from config import (
+    DEVIN_LOGIN_URL as _CFG_DEVIN_LOGIN_URL,
+    STRIPE_CHECKOUT_PREFIX as _CFG_STRIPE_PREFIX,
+)
+
+DEVIN_LOGIN_URL = _CFG_DEVIN_LOGIN_URL
 
 # Селекторы mail-client login + capcha (повторяют register_devin).
 # Основной селектор — по русскому placeholder; fallback — type=email
@@ -956,7 +962,7 @@ async def go_to_plans_and_start_trial_async(devin_page: Page) -> None:
 
 async def find_stripe_checkout_frame_async(devin_page: Page):
     for fr in devin_page.frames:
-        if fr.url.startswith("https://checkout.stripe.com/c/pay/"):
+        if fr.url.startswith(_CFG_STRIPE_PREFIX):
             return fr
     return None
 

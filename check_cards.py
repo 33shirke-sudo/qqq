@@ -56,6 +56,7 @@ from playwright.async_api import (
 )
 
 from browser_modes import VALID_MODES, DEFAULT_MODE, launch_browser_async
+from config import CHKR_URL as _CFG_CHKR_URL
 from paths import (
     BINS_FILE,
     CONFIRMED_LIVE_CARDS_FILE,
@@ -85,7 +86,8 @@ BINS_PATH = BINS_FILE
 LIVE_CARDS_PATH = LIVE_CARDS_FILE
 CONFIRMED_LIVE_CARDS_PATH = CONFIRMED_LIVE_CARDS_FILE
 DB_PATH = DB_FILE
-CHKR_URL = "https://chkr.cc/"
+# P2-8: URL в config.py (переопределяется через ENV QQQ_CHKR_URL).
+CHKR_URL = _CFG_CHKR_URL
 
 # P2-7: селекторы chkr.cc вынесены в selectors_.py (по кортежу на
 # каждую логическую точку). Используем [0]-элемент для

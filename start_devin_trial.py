@@ -44,6 +44,10 @@ from playwright.sync_api import (
 )
 
 from browser_modes import add_browser_mode_arg, launch_browser
+from config import (
+    DEVIN_LOGIN_URL as _CFG_DEVIN_LOGIN_URL,
+    STRIPE_CHECKOUT_PREFIX as _CFG_STRIPE_PREFIX,
+)
 
 from register_devin import (
     Account,
@@ -122,7 +126,8 @@ def find_identity_for_email(email: str) -> Identity | None:
 # Константы
 # ---------------------------------------------------------------------------
 
-DEVIN_LOGIN_URL = "https://app.devin.ai/auth/login"
+# P2-8: URL в config.py (переопределяется через ENV QQQ_*).
+DEVIN_LOGIN_URL = _CFG_DEVIN_LOGIN_URL
 
 # Какие тексты ищем на боковой панели и кнопках. Точные имена будут
 # уточнены в первом живом запуске; пока выкладываем самый очевидный
@@ -304,7 +309,7 @@ def login_to_devin(devin_page: Page, mail_page: Page, account: Account) -> str:
 def find_stripe_checkout_frame(devin_page: Page):
     """Вернуть Frame со Stripe Checkout (`checkout.stripe.com/c/pay/...`)."""
     for fr in devin_page.frames:
-        if fr.url.startswith("https://checkout.stripe.com/c/pay/"):
+        if fr.url.startswith(_CFG_STRIPE_PREFIX):
             return fr
     return None
 
