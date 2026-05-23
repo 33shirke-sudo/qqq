@@ -1,0 +1,14 @@
+# Default: let git normalize line endings per platform.
+# On checkout: native (CRLF on Windows, LF on Unix).
+# On commit: store as LF in the repo.
+* text=auto eol=lf
+
+# Бинарные ресурсы — никаких преобразований.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.db binary
+*.exe binary
+*.zip binary

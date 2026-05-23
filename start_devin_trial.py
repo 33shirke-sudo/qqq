@@ -38,19 +38,20 @@ import time
 from pathlib import Path
 
 from playwright.sync_api import (
-    BrowserContext,
     Page,
     TimeoutError as PWTimeout,
     sync_playwright,
 )
 
 from browser_modes import add_browser_mode_arg, launch_browser
+from config import (
+    DEVIN_LOGIN_URL as _CFG_DEVIN_LOGIN_URL,
+    STRIPE_CHECKOUT_PREFIX as _CFG_STRIPE_PREFIX,
+)
 
 from register_devin import (
     Account,
-    DEVIN_SIGNUP_URL,
     StepError,
-    extract_code,
     load_accounts,
     load_done,
     login_to_mailclient,
@@ -69,63 +70,27 @@ from register_devin import (
 # ---------------------------------------------------------------------------
 
 
-from dataclasses import dataclass
-
-
-@dataclass(frozen=True)
-class Identity:
-    """Личность для заполнения адреса в Stripe Checkout.
-
-    Парсится из строки ``личности.txt`` после ``\\t``-разделителя:
-    ``email<TAB>Имя Фамилия, Улица + номер, Индекс, Город``.
-    """
-
-    full_name: str
-    street: str   # `Paderborner Strasse 74`
-    zip_code: str  # `86529`
-    city: str    # `Schrobenhausen`
-
-
-def parse_identity(identity_str: str) -> Identity | None:
-    """Извлечь :class:`Identity` из identity-строки.
-
-    Формат: ``Имя Фамилия, Улица 12, 12345, Город``.
-    Возвращает ``None``, если формат не подходит.
-    """
-    parts = [p.strip() for p in identity_str.split(",")]
-    if len(parts) != 4:
-        return None
-    full_name, street, zip_code, city = parts
-    if not (full_name and street and zip_code and city):
-        return None
-    return Identity(full_name=full_name, street=street, zip_code=zip_code, city=city)
+# P2-2: Identity/parse_identity/find_identity_for_email переехали
+# в devin_common (раньше дублировались и в devin_async, и здесь).
+# IDENTITIES_PATH — из register_devin (alias на paths.IDENTITIES_FILE).
+from devin_common import (  # noqa: F401  — re-export
+    Identity,
+    parse_identity,
+    find_identity_for_email as _common_find_identity_for_email,
+)
 
 
 def find_identity_for_email(email: str) -> Identity | None:
-    """Найти identity по email в ``личности.txt`` (TSV-формат).
-
-    Сравнение по lower-case email. Возвращает ``None`` если не нашли.
-    """
-    if not IDENTITIES_PATH.exists():
-        return None
-    target = email.lower()
-    for raw in IDENTITIES_PATH.read_text(encoding="utf-8").splitlines():
-        line = raw.rstrip("\r")
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        if "\t" not in line:
-            continue
-        e, identity_str = line.split("\t", 1)
-        if e.strip().lower() == target:
-            return parse_identity(identity_str.strip())
-    return None
+    """Найти identity по email в ``личности.txt`` (TSV-формат)."""
+    return _common_find_identity_for_email(email, identities_path=IDENTITIES_PATH)
 
 
 # ---------------------------------------------------------------------------
 # Константы
 # ---------------------------------------------------------------------------
 
-DEVIN_LOGIN_URL = "https://app.devin.ai/auth/login"
+# P2-8: URL в config.py (переопределяется через ENV QQQ_*).
+DEVIN_LOGIN_URL = _CFG_DEVIN_LOGIN_URL
 
 # Какие тексты ищем на боковой панели и кнопках. Точные имена будут
 # уточнены в первом живом запуске; пока выкладываем самый очевидный
@@ -307,7 +272,7 @@ def login_to_devin(devin_page: Page, mail_page: Page, account: Account) -> str:
 def find_stripe_checkout_frame(devin_page: Page):
     """Вернуть Frame со Stripe Checkout (`checkout.stripe.com/c/pay/...`)."""
     for fr in devin_page.frames:
-        if fr.url.startswith("https://checkout.stripe.com/c/pay/"):
+        if fr.url.startswith(_CFG_STRIPE_PREFIX):
             return fr
     return None
 
@@ -487,11 +452,6 @@ def fill_address_and_card(stripe_frame, identity: Identity) -> None:
     # `__privateStripeFrame` или title типа «Card number input frame».
     card_filled = False
     for fr in stripe_frame.page.frames:
-        title = ""
-        try:
-            title = (fr.name or "") + " " + (fr.url or "")
-        except Exception:
-            pass
         if "card-number" in fr.url.lower() or "cardnumber" in fr.url.lower():
             try:
                 inp = fr.locator('input[name="cardnumber"]').first

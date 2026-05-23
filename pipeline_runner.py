@@ -61,10 +61,20 @@ class LogQueueStream(io.TextIOBase):
     ``mirror=None`` обрабатывается корректно.
     """
 
-    def __init__(self, log_queue: "queue.Queue[str]", mirror=None) -> None:
+    def __init__(
+        self,
+        log_queue: "queue.Queue[str]",
+        mirror=None,
+        prefix: str = "",
+    ) -> None:
         super().__init__()
         self._queue = log_queue
         self._mirror = mirror
+        # P1-6: префикс клеится к каждой строке, уходящей в GUI. Нужен,
+        # чтобы отличать stderr-сообщения (traceback'и, Playwright warnings)
+        # от обычных print()-ов; в mirror (реальный stdout/stderr) уходит без
+        # префикса, чтобы не засорять файловые логи logging.
+        self._prefix = prefix
         self._buf: list[str] = []
         self._lock = threading.Lock()
 
@@ -89,7 +99,7 @@ class LogQueueStream(io.TextIOBase):
                 lines = joined.split("\n")
                 self._buf = [lines[-1]]
                 for line in lines[:-1]:
-                    self._queue.put(line)
+                    self._queue.put(self._prefix + line if self._prefix else line)
         return len(s)
 
     def flush(self) -> None:  # noqa: D401 — fileobj API
@@ -103,7 +113,7 @@ class LogQueueStream(io.TextIOBase):
                 rest = "".join(self._buf)
                 self._buf.clear()
                 if rest:
-                    self._queue.put(rest)
+                    self._queue.put(self._prefix + rest if self._prefix else rest)
 
 
 @contextlib.contextmanager
@@ -114,8 +124,11 @@ def capture_stdio(log_queue: "queue.Queue[str]"):
     чтобы ``logging.getLogger(...).info(...)`` (используется в
     ``register_devin``) тоже попадал в GUI.
     """
+    # P1-6: stdout идёт без префикса (это типичный трафик print()),
+    # stderr помечаем маркером — чтобы traceback'и/warning'и сразу было
+    # видно в окне логов GUI.
     sink = LogQueueStream(log_queue, mirror=sys.__stdout__)
-    err_sink = LogQueueStream(log_queue, mirror=sys.__stderr__)
+    err_sink = LogQueueStream(log_queue, mirror=sys.__stderr__, prefix="[stderr] ")
 
     handler = logging.StreamHandler(sink)
     handler.setLevel(logging.INFO)

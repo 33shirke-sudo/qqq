@@ -126,7 +126,7 @@ def _count(page, selectors: tuple[str, ...]) -> dict[str, int]:
 def _print_counts(label: str, counts: dict[str, int]) -> None:
     print(f"\n=== {label} ===")
     for sel, n in counts.items():
-        marker = "  " if n == 0 else "✓ " if n > 0 else "× "
+        marker = "  " if n == 0 else "[+]" if n > 0 else "[-]"
         print(f"  {marker}{n:>4}  {sel}")
 
 

@@ -1,0 +1,47 @@
+name: CI
+
+# P2-5: PR/push гоняют ruff + pytest. Headless-Linux raннеры не имеют
+# python3-tk, поэтому tkinter в тестах заглушается на лету (см. test_validate_inputs.py).
+# Playwright/Camoufox/ddddocr тоже не нужны — все тесты unit-уровня.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  ruff:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install ruff
+        run: python -m pip install --upgrade pip ruff
+      - name: ruff check
+        run: ruff check .
+
+  pytest:
+    name: pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install test deps
+        # Минимальный набор для unit-тестов: pytest + hypothesis + faker + psutil + ddddocr.
+        # Полный requirements.txt включает Playwright/Camoufox (~ 100 МБ Firefox-бинарь),
+        # которые в unit-тестах не нужны.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest "hypothesis>=6,<7" "faker>=24,<25" "psutil>=5,<7" ddddocr playwright
+      - name: pytest
+        run: python -m pytest tests/ -q

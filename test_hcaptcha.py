@@ -223,7 +223,7 @@ async def _open_stripe_fast(context, account: Account, identity: Identity):
     """Быстрый путь до Stripe + адрес. Предполагает, что Devin уже залогинен
     (storage_state восстановлен). Возвращает (devin_page, stripe_frame)."""
     devin_page = await context.new_page()
-    print(f"[fast] открываю app.devin.ai...")
+    print("[fast] открываю app.devin.ai...")
     await devin_page.goto("https://app.devin.ai/", wait_until="domcontentloaded")
     await asyncio.sleep(1.5)
 

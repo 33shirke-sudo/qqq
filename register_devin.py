@@ -11,26 +11,53 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
-import os
-import re
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-import ddddocr
 from playwright.sync_api import (
     BrowserContext,
     Page,
     TimeoutError as PWTimeout,
     sync_playwright,
 )
+from playwright.async_api import async_playwright
 
-from browser_modes import add_browser_mode_arg, launch_browser
-from logging_utils import setup_logging, log_step, log_exception, log_timing
+from browser_modes import add_browser_mode_arg
+from config import (
+    DEVIN_SIGNUP_URL as _CFG_DEVIN_SIGNUP_URL,
+    MAIL_LOGIN_URL as _CFG_MAIL_LOGIN_URL,
+)
+# P2-2: общие типы/хелперы с devin_async переехали в devin_common.
+# Оставляем ре-экспорт в register_devin (тесты и сторонние скрипты
+# всё ещё импортируют Account, StepError, ... отсюда).
+from devin_common import (  # noqa: F401  — re-export
+    Account,
+    InvalidCodeError,
+    RegistrationError,
+    StepError,
+    _SIX_DIGIT_CODE_RE,
+    _flush_to_disk,
+    append_done,
+    append_error,
+    extract_code,
+    get_ocr as _get_ocr,
+    load_accounts,
+    load_done,
+    parse_account,
+)
+from logging_utils import setup_logging
+from paths import (
+    DB_FILE,
+    DEVIN_ERRORS_FILE,
+    DEVIN_OK_FILE,
+    EMAILS_FILE,
+    IDENTITIES_FILE,
+    TAKEN_FILE,
+)
 from storage import AccountDB
 
 
@@ -38,14 +65,13 @@ from storage import AccountDB
 # Пути
 # ---------------------------------------------------------------------------
 
-# Все рантайм-файлы лежат рядом со скриптом, чтобы CLI работал одинаково
-# и из ``.\register_devin.py``, и из ``python -m register_devin``.
-ROOT = Path(__file__).parent
-RESULTS_PATH = ROOT / "имейлы pingmx.txt"
-DEVIN_DONE_PATH = ROOT / "аккаунты devin.txt"
-DEVIN_ERRORS_PATH = ROOT / "devin_errors.txt"
-IDENTITIES_PATH = ROOT / "личности.txt"
-DB_PATH = ROOT / "accounts.db"
+# P2-1: имена в paths.py; старые алиасы оставлены — этот модуль
+# важно не ломать (1939 строк, вся Devin-логика).
+RESULTS_PATH = EMAILS_FILE
+DEVIN_DONE_PATH = DEVIN_OK_FILE
+DEVIN_ERRORS_PATH = DEVIN_ERRORS_FILE
+IDENTITIES_PATH = IDENTITIES_FILE
+DB_PATH = DB_FILE
 
 
 # ---------------------------------------------------------------------------
@@ -56,14 +82,15 @@ DB_PATH = ROOT / "accounts.db"
 # на отдельную страницу ``/mail/index.html`` (это rainloop, не SPA с хешем).
 # Хеш-маршрут после входа отсутствует, поэтому ``MAIL_INBOX_URL_HASH`` —
 # фактически часть URL-пути, по которой мы понимаем, что вход успешен.
-MAIL_LOGIN_URL = "https://mail-client.pinmx.com/"
+# P2-8: URL-ы в config.py (можно переопределить через ENV QQQ_*).
+MAIL_LOGIN_URL = _CFG_MAIL_LOGIN_URL
 MAIL_INBOX_URL_HASH = "/mail/"
 
 # URL страницы регистрации Devin. Берём именно ``/auth/signup``, а не корень
 # ``app.devin.ai`` — корень редиректит на лендинг и просит залогиниться,
 # тогда как форма «Email address + Sign up» живёт по этому пути напрямую
 # (см. design.md → Investigation → ``app.devin.ai/auth/signup``).
-DEVIN_SIGNUP_URL = "https://app.devin.ai/auth/signup"
+DEVIN_SIGNUP_URL = _CFG_DEVIN_SIGNUP_URL
 
 # Кнопка «обновить список писем». В rainloop она помечена двумя стабильными
 # признаками: классом ``buttonReload`` и привязкой ``command: reloadCommand``.
@@ -90,241 +117,21 @@ MAIL_DETAIL_BODY_FALLBACK_SELECTORS: tuple[str, ...] = (
 )
 
 
-# ---------------------------------------------------------------------------
-# Иерархия исключений пайплайна регистрации
-# ---------------------------------------------------------------------------
-
-
-class RegistrationError(Exception):
-    """Базовый класс для всех ожидаемых ошибок пайплайна регистрации."""
-
-
-class StepError(RegistrationError):
-    """Шаг провалился, аккаунт пропускаем (фиксируется в ``devin_errors.txt``).
-
-    Используется для любой неустранимой ошибки конкретного шага: таймаута,
-    невидимого элемента, явной ошибки сервера, неверных учётных данных и т.п.
-    """
-
-
-class InvalidCodeError(RegistrationError):
-    """Devin отклонил введённый код подтверждения как неверный/просроченный.
-
-    Внешний код может попытаться перечитать письмо и ввести более свежий код;
-    лимит ретраев фиксируется в задаче ``submit_devin_code``.
-    """
-
-
-# Регулярка для поиска 6-значного кода подтверждения в теле письма.
-# Negative lookarounds ``(?<!\d)`` и ``(?!\d)`` гарантируют, что найденная
-# последовательность из ровно 6 цифр НЕ примыкает к другим цифрам:
-# - 5-значные числа не подходят (короче);
-# - 7-значные числа не подходят (соседняя цифра справа ломает ``(?!\d)``);
-# - 12 цифр подряд тоже не дают совпадения (любая позиция внутри окружена
-#   цифрами с одной из сторон, поэтому lookaround всегда проваливается).
-# Берём именно первое совпадение — это самый ранний 6-значный «остров».
-_SIX_DIGIT_CODE_RE = re.compile(r"(?<!\d)(\d{6})(?!\d)")
-
-
-@dataclass(frozen=True)
-class Account:
-    """Учётная запись из ``results.txt``.
-
-    ``email`` хранится в нижнем регистре (нормализуется при парсинге),
-    ``password`` — как есть, без изменения регистра и пробелов.
-    """
-
-    email: str
-    password: str
-
-
-def parse_account(line: str) -> Account | None:
-    """Распарсить одну строку ``results.txt`` в :class:`Account`.
-
-    Правила:
-
-    - пустая строка (после удаления завершающего перевода строки) → ``None``;
-    - строка без двоеточия → ``None``;
-    - режем по первому ``":"``: слева — email, справа — всё остальное;
-    - если в правой части есть разделитель ``" | "`` (его добавляет
-      ``add_identities.py``), то всё, начиная с него, отбрасывается;
-    - email приводится к нижнему регистру; пароль остаётся как есть.
-    """
-    stripped = line.rstrip("\r\n")
-    if not stripped:
-        return None
-    if ":" not in stripped:
-        return None
-
-    email_part, _, rest = stripped.partition(":")
-    if " | " in rest:
-        password = rest.split(" | ", 1)[0]
-    else:
-        password = rest
-
-    return Account(email=email_part.lower(), password=password)
-
-
-def load_accounts(path: Path) -> list[Account]:
-    """Загрузить список аккаунтов из ``results.txt``.
-
-    Дубликаты по email отбрасываются — первый встреченный выигрывает.
-    Если файла нет, возвращается пустой список; решение о ненулевом коде
-    возврата принимает ``main`` (см. задачу CLI).
-    """
-    if not path.exists():
-        return []
-
-    text = path.read_text(encoding="utf-8")
-    # ``str.splitlines`` режет ещё и по управляющим символам вроде ``\x1c``,
-    # ``\x1e``, ``\x85`` и т.п., из-за чего пароль с такими байтами «рвался»
-    # на две строки. Делим только по ``\n`` (и срезаем хвостовой ``\r``,
-    # чтобы поддержать CRLF), а одиночный завершающий ``\n`` не превращаем
-    # в лишнюю пустую запись.
-    if text.endswith("\n"):
-        text = text[:-1]
-
-    accounts: list[Account] = []
-    seen: set[str] = set()
-    for raw_line in text.split("\n"):
-        line = raw_line.rstrip("\r")
-        account = parse_account(line)
-        if account is None:
-            continue
-        if account.email in seen:
-            continue
-        seen.add(account.email)
-        accounts.append(account)
-    return accounts
-
-
-def load_done(path: Path) -> set[str]:
-    """Загрузить множество email-ов уже обработанных аккаунтов.
-
-    Email-ы приводятся к нижнему регистру, пустые строки пропускаются.
-    Если файла нет — возвращается пустое множество (это нормальный путь
-    для первого запуска).
-    """
-    if not path.exists():
-        return set()
-
-    done: set[str] = set()
-    with path.open("r", encoding="utf-8") as fh:
-        for raw_line in fh:
-            email = raw_line.strip().lower()
-            if not email:
-                continue
-            done.add(email)
-    return done
-
-
-def _flush_to_disk(fh) -> None:
-    """Сбросить буфер и заставить ОС записать данные на диск.
-
-    После ``flush()`` данные доходят до ОС, после ``os.fsync`` — до диска.
-    Это нужно, чтобы Ctrl+C / падение процесса не теряли уже записанный
-    прогресс (Requirement 2.3).
-    """
-    fh.flush()
-    try:
-        os.fsync(fh.fileno())
-    except (OSError, AttributeError):
-        # На некоторых файловых системах / редиректах stdio fsync может
-        # быть недоступен — это не повод падать; flush мы уже сделали.
-        pass
-
-
-def append_done(path: Path, email: str) -> None:
-    """Дописать email в ``devin_done.txt`` (по одному в строке, lower-case).
-
-    Открывается в режиме ``"a"`` с UTF-8, после записи — flush + fsync,
-    чтобы прогресс гарантированно оказался на диске до возврата управления.
-    """
-    normalized = email.lower()
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(normalized + "\n")
-        _flush_to_disk(fh)
-
-
-def append_error(path: Path, email: str, reason: str) -> None:
-    """Дописать запись об ошибке в ``devin_errors.txt``.
-
-    Формат строки — TSV: ``email<TAB>reason``. Чтобы формат не «ломался»
-    переносами строк или лишними табами в причине, ``\\t``, ``\\n`` и ``\\r``
-    в ``reason`` заменяются на пробел перед записью. Email пишется в
-    нижнем регистре — для консистентности с ``devin_done.txt``.
-    """
-    normalized_email = email.lower()
-    safe_reason = (
-        reason.replace("\t", " ")
-        .replace("\r", " ")
-        .replace("\n", " ")
-    )
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(f"{normalized_email}\t{safe_reason}\n")
-        _flush_to_disk(fh)
-
-
-def extract_code(body: str) -> str | None:
-    """Извлечь 6-значный код подтверждения из тела письма.
-
-    Возвращает строку из ровно 6 цифр (первое подходящее совпадение в
-    тексте) либо ``None``, если такой последовательности нет.
-
-    За счёт negative lookarounds в регулярке (см. ``_SIX_DIGIT_CODE_RE``)
-    последовательности, примыкающие к другим цифрам, НЕ считаются кодом:
-
-    - 5 цифр подряд — не совпадают (короче 6);
-    - 7 цифр подряд — не совпадают (справа ещё цифра, ``(?!\\d)`` валится);
-    - 12 цифр подряд — тоже не совпадают (с любой стороны соседняя цифра);
-    - ``"v123456"``, ``"abc 123456 def"``, ``"Code: 654321\\n"`` —
-      совпадают, потому что границы — буквы / пробелы / переводы строк,
-      но не цифры.
-
-    Если в тексте несколько подходящих 6-значных «островов», возвращается
-    первый из них (так Devin кладёт код в начало письма / отдельной строкой).
-    """
-    match = _SIX_DIGIT_CODE_RE.search(body)
-    if match is None:
-        return None
-    return match.group(1)
-
 
 # ---------------------------------------------------------------------------
-# Капча-солвер (защитный путь)
+# P2-2: Account, parse_account, load_accounts, load_done, _flush_to_disk,
+# append_done, append_error, extract_code, _SIX_DIGIT_CODE_RE,
+# RegistrationError, StepError, InvalidCodeError, _get_ocr — все эти типы
+# и helper'ы переехали в devin_common.py и переимпортированы выше.
+# Здесь оставлены только sync-функции на Playwright (solve_digit_captcha,
+# login_to_mailclient, start_devin_signup, …).
 # ---------------------------------------------------------------------------
 
-# Сколько раз обновляем капчу, прежде чем сдаться. На странице
-# pinmx.com/ru хватало 15, на login-форме mail-client (тот же стиль
-# капчи, но картинка крупнее и шумнее) практика показала, что 15 иногда
-# не хватает — поднято до 30. На реально сильных промахах ddddocr и
-# 30 итераций укладываются в ~12 секунд.
+# Сколько раз обновляем капчу, прежде чем сдаться.
 CAPTCHA_REFRESHES = 30
 
-# Пауза после клика «обновить» — даёт сайту время отрисовать новую картинку
-# и поменять ``src``. То же значение используется в ``create_emails.py``.
+# Пауза после клика «обновить» — даёт сайту время отрисовать новую картинку.
 _CAPTCHA_REFRESH_PAUSE_S = 0.35
-
-# Кэш модели ddddocr. Инициализируем лениво — загрузка ONNX-модели стоит
-# заметного времени и памяти, а сам модуль должен импортироваться дёшево
-# (это требование тестов и Requirement 11). Модель потокобезопасно использовать
-# из одного потока, что нам и нужно.
-_ocr: ddddocr.DdddOcr | None = None
-
-
-def _get_ocr() -> ddddocr.DdddOcr:
-    """Вернуть инициализированную модель ddddocr (с алфавитом ``0-9``).
-
-    Первый вызов грузит ONNX-модель и фиксирует алфавит цифрами; последующие
-    отдают тот же объект. Делаем это лениво, чтобы ``import register_devin``
-    оставался дешёвым (без побочных эффектов на уровне модуля).
-    """
-    global _ocr
-    if _ocr is None:
-        instance = ddddocr.DdddOcr(show_ad=False)
-        instance.set_ranges("0123456789")
-        _ocr = instance
-    return _ocr
 
 
 def solve_digit_captcha(
@@ -1469,7 +1276,14 @@ def process_account(
     mail_tab: Page,
     devin_tab: Page,
 ) -> None:
-    """Полный пайплайн регистрации одного аккаунта (Requirements 8.4, 8.5, 9.1, 9.4).
+    """DEPRECATED (P2-2 ч.2): Полный пайплайн регистрации одного аккаунта.
+
+    Sync-версия. ``main()`` теперь использует
+    :func:`devin_async.process_account_async`; эта функция оставлена как
+    fallback на случай отката async-pipeline. Удалить после успешного
+    живого теста Шага 2.
+
+    Validates: Requirements 8.4, 8.5, 9.1, 9.4.
 
     Композиция шагов с одним внешним ретраем по
     :class:`InvalidCodeError`. Любая другая ошибка шага
@@ -1564,7 +1378,12 @@ def process_account_worker(
     headless: bool,
     db_path: Path,
 ) -> tuple[str, bool, str | None]:
-    """Обработать один аккаунт в отдельном воркере (для ThreadPoolExecutor).
+    """DEPRECATED (P2-2 ч.2): обработать один аккаунт в отдельном воркере.
+
+    Sync-версия для ThreadPoolExecutor. ``main()`` теперь использует
+    async-pipeline через :func:`main_async` и
+    :func:`_process_account_async_wrapper`. Эта функция оставлена как
+    fallback и удаляется после успешного живого теста Шага 2.
 
     Каждый воркер запускает свой браузер и BrowserContext для полной изоляции.
     Результат записывается в БД через thread-safe AccountDB.
@@ -1711,27 +1530,195 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+# ---------------------------------------------------------------------------
+# P2-2 ч.2: async-pipeline (для последовательного и параллельного режимов)
+# ---------------------------------------------------------------------------
+
+
+async def _process_account_async_wrapper(
+    pw,
+    account: Account,
+    worker_id: int,
+    headless: bool,
+    db: AccountDB,
+    logger: logging.Logger,
+) -> tuple[str, bool, str | None]:
+    """Открыть browser + context + 2 страницы, выполнить
+    :func:`process_account_async`, закрыть всё. Возвращает
+    ``(email, success, error_msg)`` — единая ABI как у sync
+    :func:`process_account_worker`.
+
+    Используется и для параллельного, и для последовательного режимов
+    (последовательный — это просто ``asyncio.gather`` с одним элементом
+    в семафоре). Создание собственного browser-а на аккаунт гарантирует
+    полную изоляцию cookies/localStorage/sessionStorage.
+    """
+    # Импорт здесь (а не глобально), чтобы не плодить циклов и иметь
+    # async-API только в горячем пути main_async.
+    from devin_async import process_account_async
+
+    browser = None
+    context = None
+    mail_page = None
+    devin_page = None
+    try:
+        browser = await pw.chromium.launch(channel="chrome", headless=headless)
+        context = await browser.new_context()
+        mail_page = await context.new_page()
+        devin_page = await context.new_page()
+
+        try:
+            await process_account_async(
+                account, mail_page=mail_page, devin_page=devin_page
+            )
+        except StepError as exc:
+            logger.error(
+                f"[Worker-{worker_id}] {account.email} - ОШИБКА: {exc}"
+            )
+            return (account.email, False, str(exc))
+        except Exception as exc:
+            logger.exception(
+                f"[Worker-{worker_id}] {account.email} - КРИТИЧЕСКАЯ ОШИБКА"
+            )
+            return (account.email, False, f"Worker exception: {exc}")
+        else:
+            logger.info(f"[Worker-{worker_id}] {account.email} - УСПЕХ")
+            return (account.email, True, None)
+    finally:
+        for closeable in (mail_page, devin_page, context, browser):
+            if closeable is None:
+                continue
+            try:
+                await closeable.close()
+            except Exception:
+                pass
+
+
+async def main_async(args: argparse.Namespace, db: AccountDB,
+                    pending: list[Account], logger: logging.Logger) -> tuple[int, int, bool]:
+    """Async-orchestration Шага 2: запускает Playwright (async) для всех
+    аккаунтов.
+
+    Поведение по режимам:
+
+    * ``args.workers == 1`` — последовательно (один аккаунт за раз;
+      `args.delay` секунд между аккаунтами).
+    * ``args.workers > 1`` — параллельно через ``asyncio.Semaphore``;
+      Rate-limiting: задержка ``args.worker_delay`` между запусками
+      воркеров (как в sync-режиме).
+
+    Returns:
+        ``(ok, errors, interrupted)``.
+    """
+    ok = 0
+    errors = 0
+    interrupted = False
+
+    async with async_playwright() as pw:
+        if args.workers == 1:
+            logger.info("Режим: последовательная обработка (1 воркер, async)")
+            try:
+                for i, account in enumerate(pending, 1):
+                    logger.info(f"[{i}/{len(pending)}] >>> {account.email}")
+                    email, success, error = await _process_account_async_wrapper(
+                        pw, account,
+                        worker_id=0,
+                        headless=not args.head,
+                        db=db,
+                        logger=logger,
+                    )
+                    if success:
+                        db.mark_devin_success(email)
+                        ok += 1
+                        logger.info(f"[{email}] OK — Devin зарегистрирован")
+                    else:
+                        db.mark_devin_error(email, error or "Unknown error")
+                        errors += 1
+
+                    if i < len(pending) and args.delay > 0:
+                        await asyncio.sleep(args.delay)
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                print(
+                    "\nОстановлено пользователем (Ctrl+C). "
+                    "Прогресс сохранён."
+                )
+                interrupted = True
+        else:
+            logger.info(
+                f"Режим: параллельная обработка ({args.workers} воркеров, async)"
+            )
+            logger.info(
+                f"Rate limiting: задержка {args.worker_delay}s между запуском воркеров"
+            )
+            sem = asyncio.Semaphore(args.workers)
+
+            async def run_one(idx: int, account: Account):
+                # rate limiting между запусками — последовательная пауза
+                # перед попыткой захватить семафор. Это эквивалентно
+                # sync `time.sleep(worker_delay)` перед `executor.submit`.
+                if idx > 0 and args.worker_delay > 0:
+                    await asyncio.sleep(args.worker_delay * idx)
+                async with sem:
+                    return await _process_account_async_wrapper(
+                        pw, account,
+                        worker_id=idx % args.workers,
+                        headless=not args.head,
+                        db=db,
+                        logger=logger,
+                    )
+
+            tasks = [
+                asyncio.create_task(run_one(i, acc))
+                for i, acc in enumerate(pending)
+            ]
+            try:
+                for task in asyncio.as_completed(tasks):
+                    try:
+                        email, success, error = await task
+                    except Exception as exc:
+                        logger.exception("Future task failed")
+                        print(f"[FAIL] task exception: {exc}")
+                        errors += 1
+                        continue
+
+                    if success:
+                        db.mark_devin_success(email)
+                        ok += 1
+                        print(f"[OK] {email} - УСПЕХ")
+                    else:
+                        db.mark_devin_error(email, error or "Unknown error")
+                        errors += 1
+                        print(f"[FAIL] {email} - ОШИБКА: {error}")
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                print(
+                    "\nОстановка... Отменяю активные воркеры..."
+                )
+                for t in tasks:
+                    t.cancel()
+                interrupted = True
+                print("Воркеры остановлены. Прогресс сохранён.")
+
+    return (ok, errors, interrupted)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Точка входа CLI (Validates: Requirements 10.1–10.6).
+
+    P2-2 ч.2: с этого коммита оркестрация Шага 2 (Playwright +
+    process_account) идёт через async-pipeline в :func:`main_async`;
+    sync-функции (``process_account``, ``process_account_worker``,
+    ``login_to_mailclient`` и т.д.) остаются в модуле как DEPRECATED
+    реализация для отката, пока пользователь не подтвердит, что
+    async-pipeline работает живьём (см. STATUS.md, P2-2 ч.2).
 
     Поведение:
 
     1. Загрузить аккаунты из БД. Если список пуст — напечатать сообщение
        в stderr и вернуть ``1`` (Requirement 10.2).
-    2. Загрузить уже обработанные (если ``--no-skip-done`` не задан)
-       и отфильтровать. Применить ``--limit`` (Requirement 10.3).
-    3. Поднять Playwright с ``channel="chrome"`` и
-       ``headless = not args.head``, создать один ``BrowserContext`` и
-       две вкладки — для mail-client и Devin (Requirement 10.4 / 8.4).
-    4. Для каждого аккаунта:
-
-       - вызвать :func:`process_account`;
-       - при успехе — записать в БД;
-       - при :class:`StepError` — записать ошибку в БД и продолжить;
-       - при ``KeyboardInterrupt`` — корректно прервать цикл, прогресс
-         к этому моменту уже в БД (Requirement 10.5);
-       - после каждого аккаунта — ``time.sleep(args.delay)``.
-    5. В ``finally`` закрыть браузер и контекст.
+    2. Импортировать данные из .txt-файлов, если БД пуста.
+    3. Получить ``pending`` аккаунты, применить ``--limit`` (Requirement 10.3).
+    4. Вызвать :func:`main_async` (Playwright + process_account_async).
+    5. Экспортировать БД в .txt-файлы для обратной совместимости.
     6. Напечатать итоговую сводку: успешно / ошибок / пропущено
        (Requirement 10.6).
     """
@@ -1748,7 +1735,7 @@ def main(argv: list[str] | None = None) -> int:
     if not DB_PATH.exists() or DB_PATH.stat().st_size == 0:
         logger.info("Импорт существующих данных из .txt файлов...")
         counts = db.import_from_txt_files(
-            RESULTS_PATH, ROOT / "taken.txt",
+            RESULTS_PATH, TAKEN_FILE,
             DEVIN_DONE_PATH, DEVIN_ERRORS_PATH, IDENTITIES_PATH
         )
         logger.info(f"Импортировано: {counts}")
@@ -1758,10 +1745,10 @@ def main(argv: list[str] | None = None) -> int:
     pending_data = db.get_pending_devin(limit=args.limit)
     if not pending_data:
         error_msg = (
-            f"Не найдено аккаунтов для регистрации на Devin.\n\n"
-            f"Это шаг 2 пайплайна. Сначала нужно создать email-аккаунты:\n"
-            f"  .venv\\Scripts\\python.exe create_emails.py --debug --limit 5 --head\n\n"
-            f"После этого БД будет содержать созданные аккаунты."
+            "Не найдено аккаунтов для регистрации на Devin.\n\n"
+            "Это шаг 2 пайплайна. Сначала нужно создать email-аккаунты:\n"
+            "  .venv\\Scripts\\python.exe create_emails.py --debug --limit 5 --head\n\n"
+            "После этого БД будет содержать созданные аккаунты."
         )
         logger.error(error_msg)
         print(error_msg, file=sys.stderr)
@@ -1783,140 +1770,11 @@ def main(argv: list[str] | None = None) -> int:
         print("Нечего делать.")
         return 0
 
-    ok = 0
-    errors = 0
-    interrupted = False
-
-    # Выбор режима: последовательный (workers=1) или параллельный (workers>1)
-    if args.workers == 1:
-        # ===== ПОСЛЕДОВАТЕЛЬНЫЙ РЕЖИМ (старая логика) =====
-        logger.info("Режим: последовательная обработка (1 воркер)")
-
-        with sync_playwright() as pw:
-            # Создаём браузер один раз, но для каждого аккаунта будем создавать
-            # новый BrowserContext для полной изоляции сессий (cookies, localStorage, sessionStorage).
-            browser = pw.chromium.launch(channel="chrome", headless=not args.head)
-            context = None
-
-            try:
-                for i, account in enumerate(pending, 1):
-                    logger.info(f"[{i}/{len(pending)}] >>> {account.email}")
-
-                    # Создать новый BrowserContext для каждого аккаунта.
-                    # Это гарантирует полную изоляцию: cookies, localStorage, sessionStorage, cache.
-                    if context is not None:
-                        try:
-                            context.close()
-                        except Exception:
-                            pass
-
-                    context = browser.new_context()
-                    logger.debug(f"[{account.email}] создан новый BrowserContext для изоляции")
-
-                    mail_tab = context.new_page()
-                    devin_tab = context.new_page()
-
-                    try:
-                        process_account(
-                            context,
-                            account,
-                            mail_tab=mail_tab,
-                            devin_tab=devin_tab,
-                        )
-                    except StepError as exc:
-                        db.mark_devin_error(account.email, str(exc))
-                        errors += 1
-                        logger.error(f"[{account.email}] ОШИБКА: {exc}")
-                        log_exception(logger, exc, f"processing {account.email}")
-                    except KeyboardInterrupt:
-                        print(
-                            "\nОстановлено пользователем (Ctrl+C). "
-                            "Прогресс сохранён."
-                        )
-                        interrupted = True
-                        break
-                    else:
-                        db.mark_devin_success(account.email)
-                        ok += 1
-                        logger.info(f"[{account.email}] OK — Devin зарегистрирован")
-                    finally:
-                        # Закрыть вкладки после каждого аккаунта
-                        try:
-                            mail_tab.close()
-                        except Exception:
-                            pass
-                        try:
-                            devin_tab.close()
-                        except Exception:
-                            pass
-
-                    if args.delay > 0:
-                        time.sleep(args.delay)
-            finally:
-                # Закрыть последний context и browser
-                if context is not None:
-                    try:
-                        context.close()
-                    except Exception:
-                        pass
-                try:
-                    browser.close()
-                except Exception:
-                    pass
-
-    else:
-        # ===== ПАРАЛЛЕЛЬНЫЙ РЕЖИМ (ThreadPoolExecutor) =====
-        logger.info(f"Режим: параллельная обработка ({args.workers} воркеров)")
-        logger.info(f"Rate limiting: задержка {args.worker_delay}s между запуском воркеров")
-
-        with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            futures = {}
-
-            try:
-                # Запустить воркеры с rate limiting
-                for i, account in enumerate(pending):
-                    # Rate limiting: задержка между запуском воркеров
-                    if i > 0 and args.worker_delay > 0:
-                        time.sleep(args.worker_delay)
-
-                    worker_id = i % args.workers
-                    future = executor.submit(
-                        process_account_worker,
-                        account,
-                        worker_id=worker_id,
-                        headless=not args.head,
-                        db_path=DB_PATH,
-                    )
-                    futures[future] = account
-                    logger.info(f"[{i+1}/{len(pending)}] Запущен воркер для {account.email}")
-
-                # Собрать результаты по мере завершения
-                for future in as_completed(futures):
-                    account = futures[future]
-                    try:
-                        email, success, error = future.result()
-
-                        if success:
-                            db.mark_devin_success(email)
-                            ok += 1
-                            print(f"✓ {email} - УСПЕХ")
-                        else:
-                            db.mark_devin_error(email, error or "Unknown error")
-                            errors += 1
-                            print(f"✗ {email} - ОШИБКА: {error}")
-
-                    except Exception as exc:
-                        db.mark_devin_error(account.email, f"Future exception: {exc}")
-                        errors += 1
-                        logger.exception(f"Ошибка при обработке future для {account.email}")
-                        print(f"✗ {account.email} - КРИТИЧЕСКАЯ ОШИБКА: {exc}")
-
-            except KeyboardInterrupt:
-                print("\nОстановка... Ждём завершения активных воркеров...")
-                logger.info("Получен Ctrl+C, останавливаем воркеры...")
-                executor.shutdown(wait=True, cancel_futures=True)
-                interrupted = True
-                print("Воркеры остановлены. Прогресс сохранён.")
+    # P2-2 ч.2: переключение на async-pipeline. Sync-аналоги
+    # (process_account, process_account_worker, login_to_mailclient,
+    # start_devin_signup, wait_for_devin_email_code, submit_devin_code)
+    # остаются в модуле как DEPRECATED-fallback на случай отката.
+    ok, errors, interrupted = asyncio.run(main_async(args, db, pending, logger))
 
     # Export to .txt files for backward compatibility
     logger.info("Экспорт в .txt файлы...")

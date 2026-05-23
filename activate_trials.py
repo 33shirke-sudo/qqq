@@ -38,11 +38,6 @@ import threading
 from pathlib import Path
 from typing import Iterable, Union
 
-# `is_set()` есть и у threading.Event, и у asyncio.Event — нам этого
-# достаточно. GUI передаёт threading.Event (его можно безопасно
-# выставлять из main-треда Tk), в тестах/CLI удобнее asyncio.Event.
-StopEventLike = Union[threading.Event, asyncio.Event]
-
 from camoufox.async_api import AsyncNewBrowser
 from playwright.async_api import async_playwright, BrowserContext
 
@@ -62,12 +57,17 @@ from devin_async import (
     select_card_payment_method_async,
 )
 from logging_utils import setup_logging
+from paths import DB_FILE, TEMP_PROFILES_DIR
 from register_devin import Account, StepError
 from storage import AccountDB
 
-ROOT = Path(__file__).resolve().parent
-DB_PATH = ROOT / "accounts.db"
-TEMP_PROFILES_DIR = ROOT / "temp_profiles"
+# `is_set()` есть и у threading.Event, и у asyncio.Event — нам этого
+# достаточно. GUI передаёт threading.Event (его можно безопасно
+# выставлять из main-треда Tk), в тестах/CLI удобнее asyncio.Event.
+StopEventLike = Union[threading.Event, asyncio.Event]
+
+# P2-1: пути в paths.py.
+DB_PATH = DB_FILE
 
 # Сколько секунд ждать /dashboard после submit + hCaptcha.
 _DASHBOARD_WAIT_S = 60.0

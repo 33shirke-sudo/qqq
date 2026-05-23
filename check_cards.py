@@ -56,6 +56,24 @@ from playwright.async_api import (
 )
 
 from browser_modes import VALID_MODES, DEFAULT_MODE, launch_browser_async
+from config import CHKR_URL as _CFG_CHKR_URL
+from paths import (
+    BINS_FILE,
+    CONFIRMED_LIVE_CARDS_FILE,
+    DB_FILE,
+    LIVE_CARDS_FILE,
+)
+from selectors_ import (
+    CHKR_BIN_INPUT_SELECTORS,
+    CHKR_CC_TEXTAREA_SELECTORS,
+    CHKR_GENERATE_BUTTON_SELECTORS,
+    CHKR_LIVE_RESULTS_SELECTORS,
+    CHKR_OPEN_GENERATOR_SELECTORS,
+    CHKR_PROGRESS_STOP_SELECTORS,
+    CHKR_QUANTITY_INPUT_SELECTORS,
+    CHKR_START_BUTTON_SELECTORS,
+    find_any_async,
+)
 from storage import AccountDB
 
 
@@ -63,23 +81,27 @@ from storage import AccountDB
 # Константы
 # ---------------------------------------------------------------------------
 
-ROOT = Path(__file__).parent
-BINS_PATH = ROOT / "бины.txt"
-LIVE_CARDS_PATH = ROOT / "живые карты.txt"
-CONFIRMED_LIVE_CARDS_PATH = ROOT / "подтверждённые живые карты.txt"
-DB_PATH = ROOT / "accounts.db"
-CHKR_URL = "https://chkr.cc/"
+# P2-1: имена в paths.py; алиасы для старого кода.
+BINS_PATH = BINS_FILE
+LIVE_CARDS_PATH = LIVE_CARDS_FILE
+CONFIRMED_LIVE_CARDS_PATH = CONFIRMED_LIVE_CARDS_FILE
+DB_PATH = DB_FILE
+# P2-8: URL в config.py (переопределяется через ENV QQQ_CHKR_URL).
+CHKR_URL = _CFG_CHKR_URL
 
-# Селекторы chkr.cc, зафиксированные исследованием через Playwright MCP.
-_OPEN_GENERATOR_SELECTOR = 'button[data-bs-target="#bin-generator"]'
-_BIN_INPUT_SELECTOR = "#bin"
-_QUANTITY_INPUT_SELECTOR = "#quantity"
-_GENERATE_BUTTON_SELECTOR = "a#gen"
+# P2-7: селекторы chkr.cc вынесены в selectors_.py (по кортежу на
+# каждую логическую точку). Используем [0]-элемент для
+# быстрых ``page.locator(...)``-вызовов (сохраняем былое поведение),
+# и ``find_any_async(...)`` в ключевых точках ждуна.
+_OPEN_GENERATOR_SELECTOR = CHKR_OPEN_GENERATOR_SELECTORS[0]
+_BIN_INPUT_SELECTOR = CHKR_BIN_INPUT_SELECTORS[0]
+_QUANTITY_INPUT_SELECTOR = CHKR_QUANTITY_INPUT_SELECTORS[0]
+_GENERATE_BUTTON_SELECTOR = CHKR_GENERATE_BUTTON_SELECTORS[0]
 _GEN_MODAL_CLOSE_SELECTOR = "#bin-generator button.close"
-_START_BUTTON_SELECTOR = "button#start"
-_PROGRESS_MODAL_STOP_SELECTOR = "button#modal-stop"
-_LIVE_RESULTS_SELECTOR = "#liveResults"
-_CC_TEXTAREA_SELECTOR = "textarea#cc"
+_START_BUTTON_SELECTOR = CHKR_START_BUTTON_SELECTORS[0]
+_PROGRESS_MODAL_STOP_SELECTOR = CHKR_PROGRESS_STOP_SELECTORS[0]
+_LIVE_RESULTS_SELECTOR = CHKR_LIVE_RESULTS_SELECTORS[0]
+_CC_TEXTAREA_SELECTOR = CHKR_CC_TEXTAREA_SELECTORS[0]
 
 _PROGRESS_POLL_INTERVAL_S = 0.7
 _DEFAULT_CHECK_TIMEOUT_S = 1200.0
@@ -166,7 +188,17 @@ def extract_card_credentials(line: str) -> str | None:
 async def open_chkr(page: Page) -> None:
     """Открыть chkr.cc и дождаться готовности UI."""
     await page.goto(CHKR_URL, wait_until="domcontentloaded")
-    await page.wait_for_selector(_START_BUTTON_SELECTOR, timeout=15_000)
+    # P2-7: ждём любой из вариантов START-кнопки; раньше был
+    # жёсткий ``button#start`` и при редизайне chkr.cc пайплайн бы молча
+    # падал по timeout.
+    start_loc = await find_any_async(
+        page, CHKR_START_BUTTON_SELECTORS, timeout_ms=3_000
+    )
+    if start_loc is None:
+        raise PWTimeout(
+            f"chkr.cc: ни один из селекторов START-кнопки не виден за 15s: "
+            f"{CHKR_START_BUTTON_SELECTORS}"
+        )
     try:
         await page.wait_for_load_state("networkidle", timeout=8_000)
     except PWTimeout:
