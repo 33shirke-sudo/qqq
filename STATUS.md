@@ -48,20 +48,20 @@
 - **P3-1** Эмодзи `✓`/`✗`/`⚠`/`×` в `print()` заменены на ASCII-маркеры `[OK]`/`[FAIL]`/`[WARN]`/`[+]`/`[-]`. Затронуты: `register_devin.py` (3 линии), `create_emails.py` (5 линий), `_verify_selectors.py`, `test_parse_results.py`. На Windows console (cp1251) больше не вылетит `UnicodeEncodeError`.
 - **P3-3** README дописан для Шага 4 (`check_cards.py`) и Шага 5 (`activate_trials.py`). Новые разделы покрывают входные файлы, ключевые флаги argparse для каждого скрипта, идемпотентность и взаимодействие с GUI-«Остановить». Заодно нормализовал README с CRLF на LF — были 204 CRLF-переноса.
 - **P3-6** Убран вызов `multiprocessing.freeze_support()` и импорт `multiprocessing` из `gui.py`. Код нигде не использует multiprocessing.Process (всё на ThreadPoolExecutor / asyncio.gather), а PyInstaller без freeze_support ведёт себя корректно.
+- **P2-6** `setup_logging` теперь использует `RotatingFileHandler(maxBytes=10 МБ, backupCount=5)` на `logs/qqq.log` (было `debug_YYYY-MM-DD_HH-MM-SS.log` на каждый запуск, рождая сотни файлов). Сессия помечается строкой `=== Сессия ... ===`. `cleanup_old_logs(days=30)` расширен: чистит и legacy `debug_*.log`, и ротационные `qqq.log.*` бэкапы; активный `qqq.log` не трогает. Тесты: `tests/test_logging_rotation.py` (3 сценария).
 
 ## In progress
 
-— (следующее: P2-6 RotatingFileHandler)
+— (следующее: P2-1 paths.py + латинизация путей)
 
 ## Queue (в порядке исполнения)
 
-1. **P2-6** Подключить `RotatingFileHandler` (cleanup уже есть, ротация — нет).
-2. **P2-1** `paths.py` с латинскими константами (`NICKS_FILE`, `EMAILS_FILE`, …); кириллицу оставить как алиасы.
-3. **P2-7** `selectors.py` + helper `find_any(page, selectors, timeout)`.
-4. **P2-8** `config.py` или `.env` + `python-dotenv` для URL-ов.
-5. **P2-3** Разбить `gui.py` (1544 строк, один класс) — `TableViewer`, `gui/tab_stepN.py`.
-6. **P2-2** Дедуп `register_devin.py` (1939, sync) ↔ `devin_async.py` (1183, async). Решение: async-only.
-7. **Остальные P3** (P3-2 типы, P3-5 print→logger, P3-7 расширить LOCALES) — по мере касания соответствующих файлов.
+1. **P2-1** `paths.py` с латинскими константами (`NICKS_FILE`, `EMAILS_FILE`, …); кириллицу оставить как алиасы.
+2. **P2-7** `selectors.py` + helper `find_any(page, selectors, timeout)`.
+3. **P2-8** `config.py` или `.env` + `python-dotenv` для URL-ов.
+4. **P2-3** Разбить `gui.py` (1544 строк, один класс) — `TableViewer`, `gui/tab_stepN.py`.
+5. **P2-2** Дедуп `register_devin.py` (1939, sync) ↔ `devin_async.py` (1183, async). Решение: async-only.
+6. **Остальные P3** (P3-2 типы, P3-5 print→logger, P3-7 расширить LOCALES) — по мере касания соответствующих файлов.
 
 ## Открытые вопросы пользователю
 

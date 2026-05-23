@@ -4,7 +4,8 @@
 - Настройку логирования с timestamp и уровнями
 - Декоратор @log_timing для замера времени выполнения функций
 - Логирование исключений с полным контекстом
-- Сохранение логов в logs/debug_YYYY-MM-DD_HH-MM-SS.log
+- Сохранение логов в logs/qqq.log с ротацией (RotatingFileHandler,
+  10 МБ × 5 бэкапов)
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import sys
 import time
 import traceback
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
@@ -24,6 +26,16 @@ LOGS_DIR = ROOT / "logs"
 
 # Глобальный флаг debug-режима
 _DEBUG_MODE = False
+
+# P2-6: параметры ротации. 10 МБ на файл × 5 бэкапов = до 60 МБ
+# логов на весь проект; раньше каждый запуск создавал новый
+# `debug_YYYY-MM-DD_HH-MM-SS.log`, и после сотен запусков папка
+# логов разбухала. cleanup_old_logs() оставлен для уборки
+# старых timestamped-файлов (всё ещё лежат на диске у старых
+# инсталляций).
+_LOG_MAX_BYTES = 10 * 1024 * 1024
+_LOG_BACKUP_COUNT = 5
+_LOG_FILENAME = "qqq.log"
 
 # Типы для декораторов
 F = TypeVar("F", bound=Callable[..., Any])
@@ -79,15 +91,29 @@ def setup_logging(debug: bool = False, log_to_file: bool = True) -> logging.Logg
 
     # File handler
     if log_to_file:
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        log_file = LOGS_DIR / f"debug_{timestamp}.log"
-        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        # P2-6: один файл `qqq.log` с ротацией по размеру (10 МБ × 5 бэкапов).
+        # При переполнении RotatingFileHandler переименовывает
+        # `qqq.log` → `qqq.log.1`, `qqq.log.1` → `qqq.log.2`, и так до .5.
+        # Для поиска по времени ранее были timestamped файлы, но это
+        # вело к сотням логов (PLAN.md → P2-6) — при необходимости
+        # берите timestamp из самой первой строки файла (все записи
+        # начинаются с ISO-таймстампа).
+        log_file = LOGS_DIR / _LOG_FILENAME
+        file_handler = RotatingFileHandler(
+            log_file,
+            maxBytes=_LOG_MAX_BYTES,
+            backupCount=_LOG_BACKUP_COUNT,
+            encoding="utf-8",
+        )
         file_handler.setLevel(logging.DEBUG)  # В файл всегда пишем всё
         file_formatter = logging.Formatter(log_format, date_format)
         file_handler.setFormatter(file_formatter)
         root_logger.addHandler(file_handler)
 
-        root_logger.info(f"Логи сохраняются в: {log_file}")
+        # При старте пишем явный session-маркер — чтобы в слитом
+        # лог-файле можно было отыскать границы конкретного запуска.
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        root_logger.info(f"=== Сессия {timestamp} | лог в: {log_file} ===")
 
     # Отключить verbose логи от playwright
     logging.getLogger("playwright").setLevel(logging.WARNING)
@@ -256,13 +282,18 @@ def cleanup_old_logs(days: int = 30) -> int:
     cutoff_time = time.time() - (days * 24 * 60 * 60)
     deleted = 0
 
-    for log_file in LOGS_DIR.glob("debug_*.log"):
-        try:
-            if log_file.stat().st_mtime < cutoff_time:
-                log_file.unlink()
-                deleted += 1
-        except Exception:
-            pass
+    # P2-6: чистим и старые `debug_*.log` (перед RotatingFileHandler-ом),
+    # и ротационные бэкапы `qqq.log.*`. Активный `qqq.log` не
+    # трогаем — в него пишет текущий handler.
+    patterns = ("debug_*.log", f"{_LOG_FILENAME}.*")
+    for pattern in patterns:
+        for log_file in LOGS_DIR.glob(pattern):
+            try:
+                if log_file.stat().st_mtime < cutoff_time:
+                    log_file.unlink()
+                    deleted += 1
+            except Exception:
+                pass
 
     return deleted
 
