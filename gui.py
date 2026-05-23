@@ -203,6 +203,23 @@ class PipelineGUI:
         ttk.Checkbutton(global_tab, text="Debug mode",
                        variable=self.global_debug).grid(row=3, column=0, columnspan=2, sticky=tk.W, padx=5)
 
+        # P1-11: ручной импорт уже накопленных .txt-файлов в БД. Раньше
+        # импорт происходил только если БД пустая (см. create_emails.py:571);
+        # если пользователь редактирует .txt после первого запуска, его
+        # правки теряются. Эта кнопка явно перезаливает .txt в БД.
+        ttk.Separator(global_tab, orient=tk.HORIZONTAL).grid(
+            row=4, column=0, columnspan=4, sticky=(tk.W, tk.E), pady=10
+        )
+        ttk.Label(global_tab, text="Импорт из .txt:").grid(row=5, column=0, sticky=tk.W, padx=5)
+        ttk.Button(
+            global_tab, text="Импортировать .txt в БД", command=self.import_txt_to_db
+        ).grid(row=5, column=1, columnspan=2, sticky=tk.W, padx=5)
+        ttk.Label(
+            global_tab,
+            text="(имейлы pingmx.txt, taken.txt, аккаунты devin.txt, devin_errors.txt, личности.txt)",
+            foreground="gray",
+        ).grid(row=6, column=0, columnspan=4, sticky=tk.W, padx=5)
+
         # === Step 1: Create Emails (в step1_tab) ===
         step1_frame = ttk.LabelFrame(step1_tab, text="Настройки", padding="10")
         step1_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=5)
@@ -995,6 +1012,36 @@ class PipelineGUI:
 
         self.log_queue.put(
             "\n=== Остановка пайплайна (текущий шаг завершит итерацию) ===\n"
+        )
+
+    def import_txt_to_db(self):
+        """P1-11: явный импорт всех канонических .txt в БД.
+
+        ``create_emails.main`` зовёт ``db.import_from_txt_files`` только при
+        пустой БД (``DB_PATH.stat().st_size == 0``). После первого запуска
+        ручные правки ``.txt``-файлов игнорируются — пользователь должен
+        иметь возможность принудительно их перезалить.
+        """
+        root = Path(__file__).parent
+        try:
+            counts = self._db.import_from_txt_files(
+                root / "имейлы pingmx.txt",
+                root / "taken.txt",
+                root / "аккаунты devin.txt",
+                root / "devin_errors.txt",
+                root / "личности.txt",
+            )
+        except Exception as exc:  # noqa: BLE001 — GUI showerror, не падаем
+            messagebox.showerror("Ошибка импорта", f"Не удалось импортировать .txt:\n{exc}")
+            self.log_queue.put(f"[import_txt_to_db] FAIL: {exc}\n")
+            return
+
+        summary = ", ".join(f"{k}={v}" for k, v in counts.items())
+        self.log_queue.put(f"[import_txt_to_db] импортировано: {summary}\n")
+        messagebox.showinfo(
+            "Импорт завершён",
+            "Импортировано из .txt:\n"
+            + "\n".join(f"  {k}: {v}" for k, v in counts.items()),
         )
 
     def update_progress(self):
