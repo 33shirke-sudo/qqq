@@ -1276,7 +1276,14 @@ def process_account(
     mail_tab: Page,
     devin_tab: Page,
 ) -> None:
-    """Полный пайплайн регистрации одного аккаунта (Requirements 8.4, 8.5, 9.1, 9.4).
+    """DEPRECATED (P2-2 ч.2): Полный пайплайн регистрации одного аккаунта.
+
+    Sync-версия. ``main()`` теперь использует
+    :func:`devin_async.process_account_async`; эта функция оставлена как
+    fallback на случай отката async-pipeline. Удалить после успешного
+    живого теста Шага 2.
+
+    Validates: Requirements 8.4, 8.5, 9.1, 9.4.
 
     Композиция шагов с одним внешним ретраем по
     :class:`InvalidCodeError`. Любая другая ошибка шага
@@ -1371,7 +1378,12 @@ def process_account_worker(
     headless: bool,
     db_path: Path,
 ) -> tuple[str, bool, str | None]:
-    """Обработать один аккаунт в отдельном воркере (для ThreadPoolExecutor).
+    """DEPRECATED (P2-2 ч.2): обработать один аккаунт в отдельном воркере.
+
+    Sync-версия для ThreadPoolExecutor. ``main()`` теперь использует
+    async-pipeline через :func:`main_async` и
+    :func:`_process_account_async_wrapper`. Эта функция оставлена как
+    fallback и удаляется после успешного живого теста Шага 2.
 
     Каждый воркер запускает свой браузер и BrowserContext для полной изоляции.
     Результат записывается в БД через thread-safe AccountDB.
