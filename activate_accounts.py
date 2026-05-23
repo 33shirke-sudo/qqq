@@ -49,6 +49,15 @@ from typing import Iterable
 
 from playwright.async_api import Page, TimeoutError as PWTimeout
 
+# P2-7: Stripe Checkout-селекторы вынесены в selectors_.py. Алиасы ``_CARD_*``
+# оставлены — ``_first_visible`` ниже берёт их как Iterable[str].
+from selectors_ import (
+    STRIPE_CARD_CVC_SELECTORS as _CARD_CVC_SELECTORS,
+    STRIPE_CARD_EXPIRY_SELECTORS as _CARD_EXPIRY_SELECTORS,
+    STRIPE_CARD_NAME_SELECTORS as _CARD_NAME_SELECTORS,
+    STRIPE_CARD_NUMBER_SELECTORS as _CARD_NUMBER_SELECTORS,
+)
+
 
 # ---------------------------------------------------------------------------
 # Stripe Checkout: ввод карты
@@ -79,37 +88,6 @@ def _parse_card(card_str: str) -> tuple[str, str, str, str]:
     yy = yyyy[-2:] if len(yyyy) == 4 else yyyy.zfill(2)
     cvv = m.group("cvv")
     return number, mm, yy, cvv
-
-
-# Селекторы карточных полей в Stripe Checkout. Имена ``card*`` —
-# актуальная разметка ElementsApp (2024+); ``number/expiry/cvc/name`` —
-# историческая. Порядок важен: первая видимая локатор побеждает.
-_CARD_NUMBER_SELECTORS = (
-    'input[name="cardNumber"]',
-    'input[autocomplete="cc-number"]',
-    'input[name="number"]',
-    'input[placeholder*="1234 1234" i]',
-)
-_CARD_EXPIRY_SELECTORS = (
-    'input[name="cardExpiry"]',
-    'input[autocomplete="cc-exp"]',
-    'input[name="expiry"]',
-    'input[placeholder*="MM" i][placeholder*="YY" i]',
-)
-_CARD_CVC_SELECTORS = (
-    'input[name="cardCvc"]',
-    'input[autocomplete="cc-csc"]',
-    'input[name="cvc"]',
-    'input[placeholder*="CVC" i]',
-)
-_CARD_NAME_SELECTORS = (
-    'input[name="billingName"]',
-    'input[autocomplete="cc-name"]',
-    'input[name="cardholderName"]',
-    'input[name="name"]',
-    'input[placeholder*="имя" i]',
-    'input[placeholder*="name on card" i]',
-)
 
 
 async def _first_visible(stripe_frame, selectors: Iterable[str], *, timeout_ms: int = 1_500):
