@@ -5,10 +5,8 @@ and add_identities.py with configurable parameters.
 """
 
 import os
-import sys
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
-import subprocess  # оставлен на случай standalone-запусков; шаги 1–4 идут in-process
 import threading
 import queue
 import multiprocessing
@@ -903,10 +901,9 @@ class PipelineGUI:
         """
         import asyncio
         from pathlib import Path
-        from storage import AccountDB
         from activate_trials import activate_trials_pipeline
 
-        self.log_queue.put(f"\n=== Запуск Step 5: Activate Trials ===\n")
+        self.log_queue.put("\n=== Запуск Step 5: Activate Trials ===\n")
 
         try:
             args = step5_args if step5_args is not None else self.get_step5_args()
@@ -1103,7 +1100,7 @@ class PipelineGUI:
                 self.progress5['value'] = done_activations
                 self.label5.config(text=f"{done_activations}/{total_activations}")
 
-        except Exception as e:
+        except Exception:
             pass
 
         self.root.after(2000, self.update_progress)
@@ -1673,7 +1670,7 @@ def main():
     multiprocessing.freeze_support()
 
     root = tk.Tk()
-    app = PipelineGUI(root)
+    PipelineGUI(root)
     root.mainloop()
 
 if __name__ == "__main__":

@@ -50,7 +50,7 @@ async def launch_browser_with_profile(browser_id: int, base_profile: Path, temp_
             try:
                 await browser.close()
                 print(f"[Browser {browser_id}] Zakryt")
-            except:
+            except Exception:
                 pass
 
 

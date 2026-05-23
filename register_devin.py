@@ -29,8 +29,8 @@ from playwright.sync_api import (
     sync_playwright,
 )
 
-from browser_modes import add_browser_mode_arg, launch_browser
-from logging_utils import setup_logging, log_step, log_exception, log_timing
+from browser_modes import add_browser_mode_arg
+from logging_utils import setup_logging, log_exception
 from storage import AccountDB
 
 
@@ -1758,10 +1758,10 @@ def main(argv: list[str] | None = None) -> int:
     pending_data = db.get_pending_devin(limit=args.limit)
     if not pending_data:
         error_msg = (
-            f"Не найдено аккаунтов для регистрации на Devin.\n\n"
-            f"Это шаг 2 пайплайна. Сначала нужно создать email-аккаунты:\n"
-            f"  .venv\\Scripts\\python.exe create_emails.py --debug --limit 5 --head\n\n"
-            f"После этого БД будет содержать созданные аккаунты."
+            "Не найдено аккаунтов для регистрации на Devin.\n\n"
+            "Это шаг 2 пайплайна. Сначала нужно создать email-аккаунты:\n"
+            "  .venv\\Scripts\\python.exe create_emails.py --debug --limit 5 --head\n\n"
+            "После этого БД будет содержать созданные аккаунты."
         )
         logger.error(error_msg)
         print(error_msg, file=sys.stderr)

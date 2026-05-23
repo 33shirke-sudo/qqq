@@ -20,7 +20,6 @@ Camoufox — patched Firefox с инъекциями anti-fingerprint на C++ �
 from __future__ import annotations
 
 import asyncio
-import sys
 from pathlib import Path
 
 from camoufox.async_api import AsyncCamoufox
@@ -34,7 +33,6 @@ from check_cards import (
 from devin_async import (
     Identity,
     StepError,
-    _click_first_match_async,
     fill_address_async,
     find_identity_for_email,
     find_stripe_checkout_frame_async,

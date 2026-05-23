@@ -16,8 +16,6 @@ Camoufox (Firefox) — Devin + Stripe (там hCaptcha, которая може�
 from __future__ import annotations
 
 import asyncio
-import sys
-from pathlib import Path
 
 from playwright.async_api import async_playwright
 from camoufox.async_api import AsyncCamoufox
@@ -136,8 +134,8 @@ async def amain() -> int:
     print("=" * 60)
     print(" test_hybrid")
     print("=" * 60)
-    print(f"Mail browser:  Playwright Chrome")
-    print(f"Devin browser: Camoufox Firefox (locale=ru-RU)")
+    print("Mail browser:  Playwright Chrome")
+    print("Devin browser: Camoufox Firefox (locale=ru-RU)")
     print(f"Аккаунт:       {account.email}")
     print(f"Identity:      {identity.full_name}, {identity.street}")
     if card:
@@ -212,7 +210,7 @@ async def amain() -> int:
                             print("[step] [Camoufox] hCaptcha НЕ появилась — "
                                   "Stripe сразу обработал (или ошибка)")
                         else:
-                            print(f"[step] [Camoufox] iframe найден")
+                            print("[step] [Camoufox] iframe найден")
                             cb = cb_iframe.locator("#checkbox").first
                             await cb.click(timeout=4_000)
                             print("[step] [Camoufox] кликнул #checkbox")

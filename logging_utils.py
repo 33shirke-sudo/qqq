@@ -114,7 +114,6 @@ def log_timing(func: F) -> F:
 
     # Проверить, асинхронная ли функция
     import asyncio
-    import inspect
 
     if asyncio.iscoroutinefunction(func):
         @functools.wraps(func)

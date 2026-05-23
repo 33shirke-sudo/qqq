@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Awaitable, Callable
 
 import ddddocr
@@ -25,13 +24,12 @@ from playwright.async_api import (
     TimeoutError as PWTimeout,
 )
 
-from logging_utils import log_step, log_exception, log_timing, save_screenshot_on_error
+from logging_utils import log_step, log_exception, log_timing
 
 # Переиспользуем все константы (URL'ы, селекторы) из синхронного модуля —
 # они одинаково применимы и для async API.
 from register_devin import (
     Account,
-    DEVIN_SIGNUP_URL,
     MAIL_LOGIN_URL,
     MAIL_INBOX_URL_HASH,
     MAIL_LIST_ITEM_SELECTOR,
@@ -42,8 +40,6 @@ from register_devin import (
     InvalidCodeError,
     extract_code,
     IDENTITIES_PATH,
-    RESULTS_PATH,
-    DEVIN_DONE_PATH,
 )
 
 DEVIN_LOGIN_URL = "https://app.devin.ai/auth/login"
@@ -297,9 +293,9 @@ async def login_to_mailclient_async(page: Page, account: Account, *, timeout: in
 
     try:
         await email_loc.fill(account.email)
-        logger.debug(f"[mail-login] email заполнен")
+        logger.debug("[mail-login] email заполнен")
         await pwd_loc.fill(account.password)
-        logger.debug(f"[mail-login] password заполнен")
+        logger.debug("[mail-login] password заполнен")
 
         # Кнопка submit — пробуем оба варианта.
         submit_clicked = False
@@ -315,7 +311,7 @@ async def login_to_mailclient_async(page: Page, account: Account, *, timeout: in
                 continue
         if not submit_clicked:
             # Последний шанс — Enter в поле пароля.
-            logger.debug(f"[mail-login] submit кнопка не найдена, пробую Enter")
+            logger.debug("[mail-login] submit кнопка не найдена, пробую Enter")
             await pwd_loc.press("Enter")
     except PWTimeout as exc:
         log_exception(logger, exc, "mail-login form submit")
@@ -333,13 +329,13 @@ async def login_to_mailclient_async(page: Page, account: Account, *, timeout: in
             log_exception(logger, e, "mail-login captcha")
             raise
         if not had:
-            logger.debug(f"[mail-login] капчи не было")
+            logger.debug("[mail-login] капчи не было")
             break
         if _is_post_login_url(page.url):
-            logger.info(f"[mail-login] пост-логин URL достигнут после капчи")
+            logger.info("[mail-login] пост-логин URL достигнут после капчи")
             break
     else:
-        logger.error(f"[mail-login] капча не решена после 5 попыток")
+        logger.error("[mail-login] капча не решена после 5 попыток")
         raise StepError("login failed: captcha unsolvable after 5 attempts")
 
     # Ждём пост-логин-URL или текста «Входящие»/«Inbox» до 90с.
@@ -453,7 +449,7 @@ async def wait_for_devin_email_code_async(
         try:
             await mail_page.click(MAIL_REFRESH_BUTTON_SELECTOR, timeout=2_000)
             refresh_method = "button"
-        except Exception as e:
+        except Exception:
             try:
                 for label in ("Обновить", "Refresh", "Обновить Список Писем"):
                     btn = mail_page.get_by_role(

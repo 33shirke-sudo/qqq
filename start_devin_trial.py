@@ -38,7 +38,6 @@ import time
 from pathlib import Path
 
 from playwright.sync_api import (
-    BrowserContext,
     Page,
     TimeoutError as PWTimeout,
     sync_playwright,
@@ -48,9 +47,7 @@ from browser_modes import add_browser_mode_arg, launch_browser
 
 from register_devin import (
     Account,
-    DEVIN_SIGNUP_URL,
     StepError,
-    extract_code,
     load_accounts,
     load_done,
     login_to_mailclient,
@@ -487,11 +484,6 @@ def fill_address_and_card(stripe_frame, identity: Identity) -> None:
     # `__privateStripeFrame` или title типа «Card number input frame».
     card_filled = False
     for fr in stripe_frame.page.frames:
-        title = ""
-        try:
-            title = (fr.name or "") + " " + (fr.url or "")
-        except Exception:
-            pass
         if "card-number" in fr.url.lower() or "cardnumber" in fr.url.lower():
             try:
                 inp = fr.locator('input[name="cardnumber"]').first
