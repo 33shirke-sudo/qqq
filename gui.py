@@ -9,7 +9,6 @@ import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 import threading
 import queue
-import multiprocessing
 from pathlib import Path
 from storage import AccountDB
 import pipeline_runner
@@ -1666,9 +1665,11 @@ class PipelineGUI:
             messagebox.showerror("Ошибка", f"Не удалось экспортировать: {e}")
 
 def main():
-    # Необходимо для корректной работы с PyInstaller на Windows
-    multiprocessing.freeze_support()
-
+    # P3-6: раньше тут вызывался `multiprocessing.freeze_support()`, но
+    # multiprocessing.Process в коде нигде не используется (всё на
+    # ThreadPoolExecutor / asyncio.gather), а PyInstaller без этого
+    # вызова ведёт себя корректно — он нужен только для
+    # бинарок, порождающих дочерние процессы через multiprocessing.
     root = tk.Tk()
     PipelineGUI(root)
     root.mainloop()
