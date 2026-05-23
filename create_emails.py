@@ -200,11 +200,45 @@ def solve_digits(png_bytes: bytes, ocr: ddddocr.DdddOcr) -> str:
 
 PASSWORD_RE = re.compile(r"\bпароль:\s*([^\s\n]+)")
 
+# P1-10: возможные имена поля с паролем в ответе pinmx /random-mail/create-by-device.
+# Наблюдавшиеся версии API иногда возвращали его по-разному; пробуем все
+# разумные пути перед тем, как фоллбэкнуть на DOM-парсер.
+_PASSWORD_API_KEYS: tuple[str, ...] = ("password", "pwd", "pass", "passwd", "password_plain")
+
+
+def extract_password_from_api(payload: dict) -> str | None:
+    """Извлечь пароль из JSON-ответа ``/random-mail/create-by-device``.
+
+    P1-10: раньше пароль брался только из диалога успеха (вёрстка
+    pinmx любые правки ломают регекс). Но в большинстве версий API
+    тот же пароль лежит в ``data.mail.password`` (реже — в ``data.password`` или
+    под ключем ``pwd``). Проверяем все разумные варианты и возвращаем
+    первый непустой. ``None`` — значит API не вернул пароль и надо
+    фоллбэкнуть на DOM.
+    """
+    if not isinstance(payload, dict):
+        return None
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    candidates: list[dict] = [data]
+    mail_obj = data.get("mail")
+    if isinstance(mail_obj, dict):
+        candidates.append(mail_obj)
+    for source in candidates:
+        for key in _PASSWORD_API_KEYS:
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
 
 def extract_password_from_success_dialog(page: Page) -> str | None:
-    """Достать пароль из диалога успеха.
+    """Fallback: достать пароль из диалога успеха.
 
-    Email берётся из API-ответа, а пароль показывается только в DOM один раз.
+    Используется, когда :func:`extract_password_from_api` вернула ``None``.
+    Парсит ``innerText`` модального окна регексом ``PASSWORD_RE`` — хрупко
+    и ломается при любых правках вёрстки pinmx.
     """
     try:
         text = page.evaluate(
@@ -324,15 +358,31 @@ def attempt_register(page: Page, nick: str, logger, ocr: ddddocr.DdddOcr) -> Att
 
         logger.debug(f"[{nick}] r{refresh}: API ответ code={api_code} msg={api_msg!r}")
 
-        # Успех: code == 200 и есть data.mail.mail. Пароль берём из DOM.
+        # Успех: code == 200 и есть data.mail.mail. Пароль пробуем
+        # вытащить из API (P1-10), иначе фоллбэкнем на DOM-парсер диалога.
         if api_code == 200 and isinstance(payload.get("data"), dict):
             data = payload["data"]
             mail_obj = data.get("mail") or {}
             email = (mail_obj.get("mail") or "").strip()
-            # Пароль показывается ТОЛЬКО в DOM (в JWT он хеширован).
-            # Дадим диалогу время прорисоваться.
-            page.wait_for_timeout(400)
-            password = extract_password_from_success_dialog(page) or ""
+
+            # P1-10: предпочтительный источник — сам API; он устойчив
+            # к любым правкам вёрстки pinmx.
+            password = extract_password_from_api(payload)
+            password_source = "api"
+            if not password:
+                # Fallback: версии API, которые пароля не отдают (JWT-хеш).
+                # Парсим модальное окно успеха — хрупко, пишем warn.
+                logger.warning(
+                    f"[{nick}] r{refresh}: API не вернул пароль — фоллбэк на DOM"
+                )
+                page.wait_for_timeout(400)
+                password = extract_password_from_success_dialog(page) or ""
+                password_source = "dom"
+            else:
+                logger.debug(
+                    f"[{nick}] r{refresh}: password взят из API ({password_source})"
+                )
+
             if email and password:
                 _delete(debug_path)
                 logger.info(f"[{nick}] r{refresh}: SUCCESS email={email}")
