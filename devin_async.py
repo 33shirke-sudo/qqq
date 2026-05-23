@@ -49,10 +49,12 @@ from register_devin import (
 # P2-8: URL в config.py (переопределяется через ENV QQQ_DEVIN_LOGIN_URL).
 from config import (
     DEVIN_LOGIN_URL as _CFG_DEVIN_LOGIN_URL,
+    DEVIN_SIGNUP_URL as _CFG_DEVIN_SIGNUP_URL,
     STRIPE_CHECKOUT_PREFIX as _CFG_STRIPE_PREFIX,
 )
 
 DEVIN_LOGIN_URL = _CFG_DEVIN_LOGIN_URL
+DEVIN_SIGNUP_URL = _CFG_DEVIN_SIGNUP_URL
 
 # Селекторы mail-client login + capcha (повторяют register_devin).
 # Основной селектор — по русскому placeholder; fallback — type=email
@@ -827,6 +829,191 @@ async def _login_to_devin_async_once(
             return url
         await asyncio.sleep(0.4)
     raise StepError(f"login outcome unclear: {devin_page.url}")
+
+
+# ---------------------------------------------------------------------------
+# P2-2 ч.2: async-аналог start_devin_signup + process_account
+# (для Шага 2 пайплайна: signup-форма на /auth/signup, а не login)
+# ---------------------------------------------------------------------------
+
+# Селекторы / тексты — соответствуют sync register_devin (см.
+# register_devin._DEVIN_EMAIL_ROLE, ..., _DEVIN_SAML_HEADING_NAME).
+_DEVIN_SIGNUP_EMAIL_ROLE = "textbox"
+_DEVIN_SIGNUP_EMAIL_NAME = "Email address"
+_DEVIN_SIGNUP_BUTTON_NAME = "Sign up"
+_DEVIN_SIGNUP_SUCCESS_HEADING = "Verify your identity"
+_DEVIN_SIGNUP_SAML_HEADING = "Choose your login method"
+_DEVIN_SIGNUP_POLL_INTERVAL_S = 0.2
+
+# Бэкоффы для ретраев `wait_for_email + submit_code` при InvalidCodeError.
+# Совпадают с sync `register_devin._PROCESS_ACCOUNT_RETRY_BACKOFFS_S`.
+_PROCESS_ACCOUNT_RETRY_BACKOFFS_S: tuple[float, ...] = (1.0, 2.0, 4.0)
+
+
+async def _async_locator_visible(locator) -> bool:
+    """`is_visible()` без поднятия исключений (хелпер для signup-поллинга)."""
+    try:
+        return bool(await locator.is_visible())
+    except Exception:
+        return False
+
+
+async def _async_read_devin_alert_text(devin_page: Page) -> str:
+    """Прочитать текст видимого toast/alert на странице Devin.
+
+    Возвращает первый непустой текст из ``[role="region"][aria-label*="Notification" i]``
+    или ``role="alert"``; пустую строку, если ничего не видно.
+    """
+    for locator in (
+        devin_page.locator('[role="region"][aria-label*="Notification" i]').first,
+        devin_page.get_by_role("alert").first,
+    ):
+        try:
+            if not await locator.is_visible():
+                continue
+            text = (await locator.inner_text(timeout=1_000)).strip()
+        except Exception:
+            continue
+        if text:
+            return text
+    return ""
+
+
+async def start_devin_signup_async(
+    devin_page: Page,
+    email: str,
+    *,
+    timeout: int = 30_000,
+) -> None:
+    """Async-версия sync ``register_devin.start_devin_signup``.
+
+    Алгоритм 1:1 со sync (Requirements 4.1–4.3, 5.1–5.6):
+
+    1. ``devin_page.goto(DEVIN_SIGNUP_URL, wait_until="domcontentloaded")``.
+    2. Дождаться ``getByRole("textbox", name="Email address")``.
+    3. Заполнить email, кликнуть ``getByRole("button", name="Sign up", exact=True)``.
+    4. Поллить, пока не появится ОДНО из:
+       - heading "Verify your identity" → успех;
+       - heading "Choose your login method" → SAML, ``StepError``;
+       - toast/alert → ``StepError`` с текстом из toast-а.
+    5. Если за ``timeout`` мс ничего не появилось — ``StepError`` про
+       неоднозначный исход (страховка, sync поведение идентичное).
+
+    Raises:
+        StepError: если страница не открылась, поле email не появилось,
+            появился SAML-блок, Devin показал toast/alert, либо таймаут.
+    """
+    try:
+        await devin_page.goto(DEVIN_SIGNUP_URL, wait_until="domcontentloaded")
+    except Exception as exc:
+        raise StepError(
+            f"signup failed: cannot open {DEVIN_SIGNUP_URL}: {exc}"
+        ) from exc
+
+    email_field = devin_page.get_by_role(
+        _DEVIN_SIGNUP_EMAIL_ROLE, name=_DEVIN_SIGNUP_EMAIL_NAME
+    )
+    try:
+        await email_field.wait_for(state="visible", timeout=timeout)
+    except PWTimeout as exc:
+        raise StepError("signup failed: email field not visible") from exc
+
+    try:
+        await email_field.fill(email)
+        await devin_page.get_by_role(
+            "button", name=_DEVIN_SIGNUP_BUTTON_NAME, exact=True
+        ).click()
+    except (PWTimeout, Exception) as exc:
+        raise StepError(f"signup failed: cannot submit form: {exc}") from exc
+
+    success_heading = devin_page.get_by_role(
+        "heading", name=_DEVIN_SIGNUP_SUCCESS_HEADING
+    )
+    saml_heading = devin_page.get_by_role(
+        "heading", name=_DEVIN_SIGNUP_SAML_HEADING
+    )
+
+    deadline = asyncio.get_event_loop().time() + timeout / 1000.0
+    while asyncio.get_event_loop().time() < deadline:
+        if await _async_locator_visible(success_heading):
+            return
+
+        if await _async_locator_visible(saml_heading):
+            raise StepError("non-pingmx or signup error: SAML route")
+
+        toast_text = await _async_read_devin_alert_text(devin_page)
+        if toast_text:
+            raise StepError(f"non-pingmx or signup error: {toast_text}")
+
+        await asyncio.sleep(_DEVIN_SIGNUP_POLL_INTERVAL_S)
+
+    raise StepError("signup outcome unclear (timeout)")
+
+
+async def process_account_async(
+    account: Account,
+    *,
+    mail_page: Page,
+    devin_page: Page,
+) -> None:
+    """Async-версия sync ``register_devin.process_account`` (Шаг 2).
+
+    Композиция шагов с одним внешним ретраем по :class:`InvalidCodeError`:
+
+    1. :func:`login_to_mailclient_async` на ``mail_page``;
+    2. снимаем baseline (число писем) в inbox — чтобы потом отличить
+       уже-существовавшие письма от свежего кода;
+    3. :func:`start_devin_signup_async` на ``devin_page``;
+    4. до 3 попыток: получить код через
+       :func:`wait_for_devin_email_code_async`, отправить через
+       :func:`submit_devin_code_async`; при ``InvalidCodeError`` —
+       sleep + retry с экспоненциальной паузой
+       (:data:`_PROCESS_ACCOUNT_RETRY_BACKOFFS_S`).
+
+    Raises:
+        StepError: любой неустранимый сбой шага логина / signup /
+            получения письма / подтверждения, либо исчерпаны 3 попытки.
+    """
+    # Шаг 1: логин в почту
+    await login_to_mailclient_async(mail_page, account)
+
+    # Снять baseline сразу после успешного логина — чтобы свежий код
+    # отличался от старых писем, которые уже были в inbox.
+    try:
+        baseline = await mail_page.locator(MAIL_LIST_ITEM_SELECTOR).count()
+    except Exception:
+        baseline = 0
+
+    # Шаг 2: открыть Devin signup и отправить email
+    await start_devin_signup_async(devin_page, account.email)
+
+    # Шаг 3: цикл до 3 попыток кода с экспоненциальной паузой
+    last_invalid: InvalidCodeError | None = None
+    total_attempts = len(_PROCESS_ACCOUNT_RETRY_BACKOFFS_S)
+    for attempt, backoff in enumerate(
+        _PROCESS_ACCOUNT_RETRY_BACKOFFS_S, start=1
+    ):
+        try:
+            code = await wait_for_devin_email_code_async(
+                mail_page, baseline_count=baseline
+            )
+            await submit_devin_code_async(devin_page, code)
+        except InvalidCodeError as exc:
+            last_invalid = exc
+            if attempt < total_attempts:
+                await asyncio.sleep(backoff)
+                continue
+            raise StepError(
+                f"verification failed after {total_attempts} attempts: {exc}"
+            ) from exc
+        else:
+            return
+
+    # Страховка: до сюда мы доходим, только если кортеж пауз пуст
+    # (никогда не должно случиться).
+    raise StepError(
+        f"verification failed after {total_attempts} attempts: {last_invalid}"
+    )
 
 
 # ---------------------------------------------------------------------------

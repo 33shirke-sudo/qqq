@@ -11,10 +11,10 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable
 
@@ -24,6 +24,7 @@ from playwright.sync_api import (
     TimeoutError as PWTimeout,
     sync_playwright,
 )
+from playwright.async_api import async_playwright
 
 from browser_modes import add_browser_mode_arg
 from config import (
@@ -48,7 +49,7 @@ from devin_common import (  # noqa: F401  — re-export
     load_done,
     parse_account,
 )
-from logging_utils import setup_logging, log_exception
+from logging_utils import setup_logging
 from paths import (
     DB_FILE,
     DEVIN_ERRORS_FILE,
@@ -1517,27 +1518,195 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+# ---------------------------------------------------------------------------
+# P2-2 ч.2: async-pipeline (для последовательного и параллельного режимов)
+# ---------------------------------------------------------------------------
+
+
+async def _process_account_async_wrapper(
+    pw,
+    account: Account,
+    worker_id: int,
+    headless: bool,
+    db: AccountDB,
+    logger: logging.Logger,
+) -> tuple[str, bool, str | None]:
+    """Открыть browser + context + 2 страницы, выполнить
+    :func:`process_account_async`, закрыть всё. Возвращает
+    ``(email, success, error_msg)`` — единая ABI как у sync
+    :func:`process_account_worker`.
+
+    Используется и для параллельного, и для последовательного режимов
+    (последовательный — это просто ``asyncio.gather`` с одним элементом
+    в семафоре). Создание собственного browser-а на аккаунт гарантирует
+    полную изоляцию cookies/localStorage/sessionStorage.
+    """
+    # Импорт здесь (а не глобально), чтобы не плодить циклов и иметь
+    # async-API только в горячем пути main_async.
+    from devin_async import process_account_async
+
+    browser = None
+    context = None
+    mail_page = None
+    devin_page = None
+    try:
+        browser = await pw.chromium.launch(channel="chrome", headless=headless)
+        context = await browser.new_context()
+        mail_page = await context.new_page()
+        devin_page = await context.new_page()
+
+        try:
+            await process_account_async(
+                account, mail_page=mail_page, devin_page=devin_page
+            )
+        except StepError as exc:
+            logger.error(
+                f"[Worker-{worker_id}] {account.email} - ОШИБКА: {exc}"
+            )
+            return (account.email, False, str(exc))
+        except Exception as exc:
+            logger.exception(
+                f"[Worker-{worker_id}] {account.email} - КРИТИЧЕСКАЯ ОШИБКА"
+            )
+            return (account.email, False, f"Worker exception: {exc}")
+        else:
+            logger.info(f"[Worker-{worker_id}] {account.email} - УСПЕХ")
+            return (account.email, True, None)
+    finally:
+        for closeable in (mail_page, devin_page, context, browser):
+            if closeable is None:
+                continue
+            try:
+                await closeable.close()
+            except Exception:
+                pass
+
+
+async def main_async(args: argparse.Namespace, db: AccountDB,
+                    pending: list[Account], logger: logging.Logger) -> tuple[int, int, bool]:
+    """Async-orchestration Шага 2: запускает Playwright (async) для всех
+    аккаунтов.
+
+    Поведение по режимам:
+
+    * ``args.workers == 1`` — последовательно (один аккаунт за раз;
+      `args.delay` секунд между аккаунтами).
+    * ``args.workers > 1`` — параллельно через ``asyncio.Semaphore``;
+      Rate-limiting: задержка ``args.worker_delay`` между запусками
+      воркеров (как в sync-режиме).
+
+    Returns:
+        ``(ok, errors, interrupted)``.
+    """
+    ok = 0
+    errors = 0
+    interrupted = False
+
+    async with async_playwright() as pw:
+        if args.workers == 1:
+            logger.info("Режим: последовательная обработка (1 воркер, async)")
+            try:
+                for i, account in enumerate(pending, 1):
+                    logger.info(f"[{i}/{len(pending)}] >>> {account.email}")
+                    email, success, error = await _process_account_async_wrapper(
+                        pw, account,
+                        worker_id=0,
+                        headless=not args.head,
+                        db=db,
+                        logger=logger,
+                    )
+                    if success:
+                        db.mark_devin_success(email)
+                        ok += 1
+                        logger.info(f"[{email}] OK — Devin зарегистрирован")
+                    else:
+                        db.mark_devin_error(email, error or "Unknown error")
+                        errors += 1
+
+                    if i < len(pending) and args.delay > 0:
+                        await asyncio.sleep(args.delay)
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                print(
+                    "\nОстановлено пользователем (Ctrl+C). "
+                    "Прогресс сохранён."
+                )
+                interrupted = True
+        else:
+            logger.info(
+                f"Режим: параллельная обработка ({args.workers} воркеров, async)"
+            )
+            logger.info(
+                f"Rate limiting: задержка {args.worker_delay}s между запуском воркеров"
+            )
+            sem = asyncio.Semaphore(args.workers)
+
+            async def run_one(idx: int, account: Account):
+                # rate limiting между запусками — последовательная пауза
+                # перед попыткой захватить семафор. Это эквивалентно
+                # sync `time.sleep(worker_delay)` перед `executor.submit`.
+                if idx > 0 and args.worker_delay > 0:
+                    await asyncio.sleep(args.worker_delay * idx)
+                async with sem:
+                    return await _process_account_async_wrapper(
+                        pw, account,
+                        worker_id=idx % args.workers,
+                        headless=not args.head,
+                        db=db,
+                        logger=logger,
+                    )
+
+            tasks = [
+                asyncio.create_task(run_one(i, acc))
+                for i, acc in enumerate(pending)
+            ]
+            try:
+                for task in asyncio.as_completed(tasks):
+                    try:
+                        email, success, error = await task
+                    except Exception as exc:
+                        logger.exception("Future task failed")
+                        print(f"[FAIL] task exception: {exc}")
+                        errors += 1
+                        continue
+
+                    if success:
+                        db.mark_devin_success(email)
+                        ok += 1
+                        print(f"[OK] {email} - УСПЕХ")
+                    else:
+                        db.mark_devin_error(email, error or "Unknown error")
+                        errors += 1
+                        print(f"[FAIL] {email} - ОШИБКА: {error}")
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                print(
+                    "\nОстановка... Отменяю активные воркеры..."
+                )
+                for t in tasks:
+                    t.cancel()
+                interrupted = True
+                print("Воркеры остановлены. Прогресс сохранён.")
+
+    return (ok, errors, interrupted)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Точка входа CLI (Validates: Requirements 10.1–10.6).
+
+    P2-2 ч.2: с этого коммита оркестрация Шага 2 (Playwright +
+    process_account) идёт через async-pipeline в :func:`main_async`;
+    sync-функции (``process_account``, ``process_account_worker``,
+    ``login_to_mailclient`` и т.д.) остаются в модуле как DEPRECATED
+    реализация для отката, пока пользователь не подтвердит, что
+    async-pipeline работает живьём (см. STATUS.md, P2-2 ч.2).
 
     Поведение:
 
     1. Загрузить аккаунты из БД. Если список пуст — напечатать сообщение
        в stderr и вернуть ``1`` (Requirement 10.2).
-    2. Загрузить уже обработанные (если ``--no-skip-done`` не задан)
-       и отфильтровать. Применить ``--limit`` (Requirement 10.3).
-    3. Поднять Playwright с ``channel="chrome"`` и
-       ``headless = not args.head``, создать один ``BrowserContext`` и
-       две вкладки — для mail-client и Devin (Requirement 10.4 / 8.4).
-    4. Для каждого аккаунта:
-
-       - вызвать :func:`process_account`;
-       - при успехе — записать в БД;
-       - при :class:`StepError` — записать ошибку в БД и продолжить;
-       - при ``KeyboardInterrupt`` — корректно прервать цикл, прогресс
-         к этому моменту уже в БД (Requirement 10.5);
-       - после каждого аккаунта — ``time.sleep(args.delay)``.
-    5. В ``finally`` закрыть браузер и контекст.
+    2. Импортировать данные из .txt-файлов, если БД пуста.
+    3. Получить ``pending`` аккаунты, применить ``--limit`` (Requirement 10.3).
+    4. Вызвать :func:`main_async` (Playwright + process_account_async).
+    5. Экспортировать БД в .txt-файлы для обратной совместимости.
     6. Напечатать итоговую сводку: успешно / ошибок / пропущено
        (Requirement 10.6).
     """
@@ -1589,140 +1758,11 @@ def main(argv: list[str] | None = None) -> int:
         print("Нечего делать.")
         return 0
 
-    ok = 0
-    errors = 0
-    interrupted = False
-
-    # Выбор режима: последовательный (workers=1) или параллельный (workers>1)
-    if args.workers == 1:
-        # ===== ПОСЛЕДОВАТЕЛЬНЫЙ РЕЖИМ (старая логика) =====
-        logger.info("Режим: последовательная обработка (1 воркер)")
-
-        with sync_playwright() as pw:
-            # Создаём браузер один раз, но для каждого аккаунта будем создавать
-            # новый BrowserContext для полной изоляции сессий (cookies, localStorage, sessionStorage).
-            browser = pw.chromium.launch(channel="chrome", headless=not args.head)
-            context = None
-
-            try:
-                for i, account in enumerate(pending, 1):
-                    logger.info(f"[{i}/{len(pending)}] >>> {account.email}")
-
-                    # Создать новый BrowserContext для каждого аккаунта.
-                    # Это гарантирует полную изоляцию: cookies, localStorage, sessionStorage, cache.
-                    if context is not None:
-                        try:
-                            context.close()
-                        except Exception:
-                            pass
-
-                    context = browser.new_context()
-                    logger.debug(f"[{account.email}] создан новый BrowserContext для изоляции")
-
-                    mail_tab = context.new_page()
-                    devin_tab = context.new_page()
-
-                    try:
-                        process_account(
-                            context,
-                            account,
-                            mail_tab=mail_tab,
-                            devin_tab=devin_tab,
-                        )
-                    except StepError as exc:
-                        db.mark_devin_error(account.email, str(exc))
-                        errors += 1
-                        logger.error(f"[{account.email}] ОШИБКА: {exc}")
-                        log_exception(logger, exc, f"processing {account.email}")
-                    except KeyboardInterrupt:
-                        print(
-                            "\nОстановлено пользователем (Ctrl+C). "
-                            "Прогресс сохранён."
-                        )
-                        interrupted = True
-                        break
-                    else:
-                        db.mark_devin_success(account.email)
-                        ok += 1
-                        logger.info(f"[{account.email}] OK — Devin зарегистрирован")
-                    finally:
-                        # Закрыть вкладки после каждого аккаунта
-                        try:
-                            mail_tab.close()
-                        except Exception:
-                            pass
-                        try:
-                            devin_tab.close()
-                        except Exception:
-                            pass
-
-                    if args.delay > 0:
-                        time.sleep(args.delay)
-            finally:
-                # Закрыть последний context и browser
-                if context is not None:
-                    try:
-                        context.close()
-                    except Exception:
-                        pass
-                try:
-                    browser.close()
-                except Exception:
-                    pass
-
-    else:
-        # ===== ПАРАЛЛЕЛЬНЫЙ РЕЖИМ (ThreadPoolExecutor) =====
-        logger.info(f"Режим: параллельная обработка ({args.workers} воркеров)")
-        logger.info(f"Rate limiting: задержка {args.worker_delay}s между запуском воркеров")
-
-        with ThreadPoolExecutor(max_workers=args.workers) as executor:
-            futures = {}
-
-            try:
-                # Запустить воркеры с rate limiting
-                for i, account in enumerate(pending):
-                    # Rate limiting: задержка между запуском воркеров
-                    if i > 0 and args.worker_delay > 0:
-                        time.sleep(args.worker_delay)
-
-                    worker_id = i % args.workers
-                    future = executor.submit(
-                        process_account_worker,
-                        account,
-                        worker_id=worker_id,
-                        headless=not args.head,
-                        db_path=DB_PATH,
-                    )
-                    futures[future] = account
-                    logger.info(f"[{i+1}/{len(pending)}] Запущен воркер для {account.email}")
-
-                # Собрать результаты по мере завершения
-                for future in as_completed(futures):
-                    account = futures[future]
-                    try:
-                        email, success, error = future.result()
-
-                        if success:
-                            db.mark_devin_success(email)
-                            ok += 1
-                            print(f"[OK] {email} - УСПЕХ")
-                        else:
-                            db.mark_devin_error(email, error or "Unknown error")
-                            errors += 1
-                            print(f"[FAIL] {email} - ОШИБКА: {error}")
-
-                    except Exception as exc:
-                        db.mark_devin_error(account.email, f"Future exception: {exc}")
-                        errors += 1
-                        logger.exception(f"Ошибка при обработке future для {account.email}")
-                        print(f"[FAIL] {account.email} - КРИТИЧЕСКАЯ ОШИБКА: {exc}")
-
-            except KeyboardInterrupt:
-                print("\nОстановка... Ждём завершения активных воркеров...")
-                logger.info("Получен Ctrl+C, останавливаем воркеры...")
-                executor.shutdown(wait=True, cancel_futures=True)
-                interrupted = True
-                print("Воркеры остановлены. Прогресс сохранён.")
+    # P2-2 ч.2: переключение на async-pipeline. Sync-аналоги
+    # (process_account, process_account_worker, login_to_mailclient,
+    # start_devin_signup, wait_for_devin_email_code, submit_devin_code)
+    # остаются в модуле как DEPRECATED-fallback на случай отката.
+    ok, errors, interrupted = asyncio.run(main_async(args, db, pending, logger))
 
     # Export to .txt files for backward compatibility
     logger.info("Экспорт в .txt файлы...")
