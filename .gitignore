@@ -1,0 +1,83 @@
+# P2-4: предотвращаем коммит runtime-артефактов, PII и отладочных дампов.
+# PLAN.md документирует, что эти файлы регулярно появляются в индексе:
+# accounts.db, captcha_debug/, временные профили браузера, дампы скриншотов,
+# .txt-результаты регистрации (содержат email:password).
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+build/
+dist/
+*.spec
+
+# === Virtual environments ===
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# === IDE / editor ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# === SQLite БД (PII: реальные аккаунты) ===
+*.db
+*.db-wal
+*.db-shm
+
+# === Артефакты пайплайна ===
+captcha_debug/
+logs/
+temp_profiles/
+browser_profile/
+chrome_profile_copy/
+__hcaptcha_*.png
+hcaptcha_state.json
+state.json
+
+# === Скриншоты отладки (Шаг 4/5) ===
+trial_dialog.png
+trial_filled.png
+debug_*.png
+*.screenshot.png
+
+# === .txt с накопленными результатами (содержат email:password) ===
+имейлы pingmx.txt
+имейлы pingmx.txt.bak
+аккаунты devin.txt
+devin_errors.txt
+девин_errors.txt
+личности.txt
+пинмx ящики.txt
+taken.txt
+живые карты.txt
+использованные карты.txt
+бины.txt.bak
+*.txt.bak
+
+# === PyInstaller / сборка ===
+*.manifest
+*.exe
+!build_exe.cmd
+
+# === Прочее ===
+*.log
+.env
+.env.local
