@@ -34,29 +34,33 @@
 - Тесты: `test_activate_trials_stop_event`, `test_add_identities`, `test_done_tracking_property`, `test_extract_code_property`, `test_gui_stop_pipeline`, `test_parse_account_property`, `test_validate_inputs`.
 - **P2-6 (частично)** `cleanup_old_logs(days=30)` и `cleanup_old_screenshots(days=7)` уже есть, но без `RotatingFileHandler`.
 
+Закрыто в этом PR:
+
+- **P1-2** `self._db = AccountDB(DB_PATH)` в `__init__`, закрывается в `_on_close` (`gui.py:48-65`). Проверено — 18+ мест `show_/refresh_` используют `self._db`.
+- **Нормализация переносов строк** на LF + `.gitattributes` с `* text=auto eol=lf`. Не из PLAN.md, но необходимое условие для атомарных правок (половина .py-файлов была CRLF).
+- **P1-4** `psutil` + `_kill_browser_descendants(grace_seconds=2.0)` (`gui.py:90-150`), вызывается из `stop_pipeline` в daemon-потоке и из `_on_close`. Добавлен `psutil>=5,<7` в `requirements.txt`. Тесты: `tests/test_gui_kill_browser.py`, обновлён `tests/test_gui_stop_pipeline.py`.
+
 ## In progress
 
-- **STATUS.md + PR-инфраструктура** — этот коммит.
+— (после P1-4 выбирать следующий пункт из Queue)
 
 ## Queue (в порядке исполнения)
 
-1. **P1-2** Persistent `self.db = AccountDB(DB_PATH)` в `__init__` GUI; закрывать в `WM_DELETE_WINDOW`. Сейчас открываем/закрываем на каждом тике `update_progress` (`gui.py:911-…`).
-2. **P1-4** `psutil` + kill-tree для Camoufox/Chrome детей при `stop_pipeline`. Добавить `psutil` в `requirements.txt`. Шаги 1–4 теперь in-process, но Шаг 5 запускает Firefox через Camoufox — он должен корректно умирать.
-3. **P1-10** Пинмx-пароль из перехваченного API-ответа `create-by-device` (`code=200`). DOM-парсер `extract_password_from_success_dialog` оставить как fallback с `warn`-логом.
-4. **P1-11 (GUI-часть)** Кнопка «Импортировать из .txt» с явным `db.import_from_txt_files(...)`.
-5. **P1-6** Разделение stdout/stderr в `pipeline_runner.LogQueueStream`: префиксы `[stderr]`/`[stdout]`. Стримы уже разные, но в очереди мерджатся без префикса.
-6. **P2-4** `.gitignore` (см. список путей в `PLAN.md` → P2-4).
-7. **P2-5** CI (GitHub Actions): `pytest` + `ruff` на каждый push/PR.
-8. **P3-1** Убрать `✓`/`✗` из `print()` в `register_devin.py:1902,1906,1912` и `create_emails.py:644,649,652,657` (Windows cp1251 ломает).
-9. **P3-3** Дописать в README разделы про Шаг 4 (`check_cards`) и Шаг 5 (`activate_trials`).
-10. **P3-6** Убрать `multiprocessing.freeze_support()` из `gui.py:1537` — `multiprocessing` фактически не используется.
-11. **P2-6** Подключить `RotatingFileHandler` (cleanup уже есть, ротация — нет).
-12. **P2-1** `paths.py` с латинскими константами (`NICKS_FILE`, `EMAILS_FILE`, …); кириллицу оставить как алиасы.
-13. **P2-7** `selectors.py` + helper `find_any(page, selectors, timeout)`.
-14. **P2-8** `config.py` или `.env` + `python-dotenv` для URL-ов.
-15. **P2-3** Разбить `gui.py` (1544 строк, один класс) — `TableViewer`, `gui/tab_stepN.py`.
-16. **P2-2** Дедуп `register_devin.py` (1939, sync) ↔ `devin_async.py` (1183, async). Решение: async-only.
-17. **Остальные P3** (P3-2 типы, P3-5 print→logger, P3-7 расширить LOCALES) — по мере касания соответствующих файлов.
+1. **P1-10** Пинмx-пароль из перехваченного API-ответа `create-by-device` (`code=200`). DOM-парсер `extract_password_from_success_dialog` оставить как fallback с `warn`-логом.
+2. **P1-11 (GUI-часть)** Кнопка «Импортировать из .txt» с явным `db.import_from_txt_files(...)`.
+3. **P1-6** Разделение stdout/stderr в `pipeline_runner.LogQueueStream`: префиксы `[stderr]`/`[stdout]`. Стримы уже разные, но в очереди мерджатся без префикса.
+4. **P2-4** `.gitignore` (см. список путей в `PLAN.md` → P2-4).
+5. **P2-5** CI (GitHub Actions): `pytest` + `ruff` на каждый push/PR.
+6. **P3-1** Убрать `✓`/`✗` из `print()` в `register_devin.py:1902,1906,1912` и `create_emails.py:644,649,652,657` (Windows cp1251 ломает).
+7. **P3-3** Дописать в README разделы про Шаг 4 (`check_cards`) и Шаг 5 (`activate_trials`).
+8. **P3-6** Убрать `multiprocessing.freeze_support()` из `gui.py` — `multiprocessing` фактически не используется.
+9. **P2-6** Подключить `RotatingFileHandler` (cleanup уже есть, ротация — нет).
+10. **P2-1** `paths.py` с латинскими константами (`NICKS_FILE`, `EMAILS_FILE`, …); кириллицу оставить как алиасы.
+11. **P2-7** `selectors.py` + helper `find_any(page, selectors, timeout)`.
+12. **P2-8** `config.py` или `.env` + `python-dotenv` для URL-ов.
+13. **P2-3** Разбить `gui.py` (1544 строк, один класс) — `TableViewer`, `gui/tab_stepN.py`.
+14. **P2-2** Дедуп `register_devin.py` (1939, sync) ↔ `devin_async.py` (1183, async). Решение: async-only.
+15. **Остальные P3** (P3-2 типы, P3-5 print→logger, P3-7 расширить LOCALES) — по мере касания соответствующих файлов.
 
 ## Открытые вопросы пользователю
 

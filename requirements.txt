@@ -6,3 +6,6 @@ hypothesis>=6,<7
 # Установка тянет patched-бинарь Firefox (~100 МБ) — первая загрузка через
 # `python -m camoufox fetch`.
 camoufox>=0.4
+# P1-4: GUI stop_pipeline убивает дочерние Firefox/Chrome через дерево
+# процессов; кросс-платформенный обход — psutil.
+psutil>=5,<7

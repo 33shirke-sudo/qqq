@@ -16,6 +16,22 @@ from pathlib import Path
 from storage import AccountDB
 import pipeline_runner
 
+try:
+    import psutil  # type: ignore
+except ImportError:  # pragma: no cover — psutil опционален в unit-тестах
+    psutil = None  # type: ignore
+
+# P1-4: имена дочерних браузерных процессов, которые Camoufox/Playwright
+# поднимают в Шаге 5. При stop_pipeline их надо убивать принуди-
+# тельно, иначе окна Firefox/Chrome остаются висеть и держат lock-файлы
+# на профилях — следующий запуск валится на ProfileLocked.
+_BROWSER_PROC_NAMES = (
+    "firefox", "firefox-bin", "firefox.exe",
+    "chrome", "chrome.exe", "chromium", "chromium.exe",
+    "camoufox", "camoufox.exe",
+    "playwright", "playwright.exe",
+)
+
 DB_PATH = Path(__file__).parent / "accounts.db"
 NICKS_FILE = Path(__file__).parent / "имена для имейлов.txt"
 
@@ -58,11 +74,72 @@ class PipelineGUI:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _on_close(self):
+        # При закрытии окна также убиваем оставшиеся браузерные процессы —
+        # иначе на Windows lock-файлы профиля Firefox/Chrome держатся ещё
+        # десятки секунд и мешают следующему запуску.
+        try:
+            self._kill_browser_descendants()
+        except Exception:
+            pass
         try:
             self._db.close()
         except Exception:
             pass
         self.root.destroy()
+
+    def _kill_browser_descendants(self, grace_seconds: float = 2.0) -> int:
+        """Принудительно убить все дочерние браузерные процессы текущего GUI.
+
+        P1-4: ``process.terminate()`` шлёт SIGTERM только Python-у, а
+        Playwright/Camoufox форкают ``firefox``/``chrome`` отдельными
+        процессами. На Windows их штатно гасят через ``taskkill /T /F``;
+        кросс-платформенный аналог — обход дерева детей через ``psutil``.
+
+        Возвращает количество убитых процессов. Если psutil не установлен,
+        тихо возвращает 0 и ничего не делает — это допустимый fallback для
+        минимальных unit-окружений.
+        """
+        if psutil is None:
+            return 0
+        try:
+            me = psutil.Process(os.getpid())
+            descendants = me.children(recursive=True)
+        except Exception:
+            return 0
+
+        targets = []
+        for proc in descendants:
+            try:
+                name = (proc.name() or "").lower()
+            except Exception:
+                continue
+            if any(name == n or name.startswith(n) for n in _BROWSER_PROC_NAMES):
+                targets.append(proc)
+
+        if not targets:
+            return 0
+
+        # Сначала SIGTERM всем, даём пару секунд на graceful exit,
+        # потом добиваем выживших через SIGKILL.
+        for proc in targets:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        try:
+            gone, alive = psutil.wait_procs(targets, timeout=grace_seconds)
+        except Exception:
+            alive = targets
+        for proc in alive:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        try:
+            psutil.wait_procs(alive, timeout=grace_seconds)
+        except Exception:
+            pass
+        return len(targets)
 
     def create_widgets(self):
         # Main container
@@ -903,6 +980,18 @@ class PipelineGUI:
                 process.terminate()
             except Exception:
                 pass
+
+        # P1-4: браузерные подпроцессы Шага 5 не реагируют на SIGTERM их
+        # python-родителя — обходим дерево детей вручную. Делаем это в
+        # фоне, чтобы GUI не висел на grace_seconds-ждании; сам stop
+        # остаётся «мягким» для воркеров, но реальные firefox/chrome мы
+        # всё равно вырубаем — иначе они будут продолжать заполнять
+        # форму Stripe / ловить hCaptcha.
+        threading.Thread(
+            target=self._kill_browser_descendants,
+            name="kill-browser-descendants",
+            daemon=True,
+        ).start()
 
         self.log_queue.put(
             "\n=== Остановка пайплайна (текущий шаг завершит итерацию) ===\n"

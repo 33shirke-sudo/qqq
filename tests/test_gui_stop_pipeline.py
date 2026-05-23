@@ -57,6 +57,16 @@ def _make_stub_gui(running: bool = True, with_stop_event: bool = True):
     stub._step5_stop_event = threading.Event() if with_stop_event else None
     stub.processes = {}
     stub.log_queue = queue_module.Queue()
+    # P1-4: stop_pipeline стартует daemon-поток на _kill_browser_descendants.
+    # В unit-тестах psutil может отсутствовать — делаем no-op, который ещё
+    # и фиксирует факт вызова, чтобы assert-ить ниже.
+    stub._kill_called = threading.Event()
+
+    def _fake_kill(grace_seconds: float = 0.0) -> int:
+        stub._kill_called.set()
+        return 0
+
+    stub._kill_browser_descendants = _fake_kill
     return stub
 
 
@@ -72,6 +82,10 @@ def test_stop_pipeline_sets_step5_stop_event_when_active() -> None:
 
     assert pre_event.is_set(), "stop_pipeline должен взводить step5_stop_event"
     assert stub.running is False, "stop_pipeline должен снимать running"
+    # P1-4: kill_browser_descendants должен быть запущен (асинхронно).
+    assert stub._kill_called.wait(timeout=2.0), (
+        "stop_pipeline должен звать _kill_browser_descendants в daemon-потоке"
+    )
 
 
 def test_stop_pipeline_safe_when_step5_not_running() -> None:
