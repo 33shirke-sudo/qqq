@@ -1899,17 +1899,17 @@ def main(argv: list[str] | None = None) -> int:
                         if success:
                             db.mark_devin_success(email)
                             ok += 1
-                            print(f"✓ {email} - УСПЕХ")
+                            print(f"[OK] {email} - УСПЕХ")
                         else:
                             db.mark_devin_error(email, error or "Unknown error")
                             errors += 1
-                            print(f"✗ {email} - ОШИБКА: {error}")
+                            print(f"[FAIL] {email} - ОШИБКА: {error}")
 
                     except Exception as exc:
                         db.mark_devin_error(account.email, f"Future exception: {exc}")
                         errors += 1
                         logger.exception(f"Ошибка при обработке future для {account.email}")
-                        print(f"✗ {account.email} - КРИТИЧЕСКАЯ ОШИБКА: {exc}")
+                        print(f"[FAIL] {account.email} - КРИТИЧЕСКАЯ ОШИБКА: {exc}")
 
             except KeyboardInterrupt:
                 print("\nОстановка... Ждём завершения активных воркеров...")

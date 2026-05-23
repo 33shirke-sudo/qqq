@@ -43,7 +43,7 @@ def main() -> int:
     print(f"[verify] {inbox} ({len(html):,} chars)\n")
     for label, marker in markers.items():
         n = _count_substring_occurrences(html, marker)
-        ok = "✓" if n > 0 else "×"
+        ok = "[+]" if n > 0 else "[-]"
         print(f"  {ok} {n:>3}  {label!s}")
 
     return 0

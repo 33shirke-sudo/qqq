@@ -44,24 +44,24 @@
 - **P1-6** `LogQueueStream` принимает параметр `prefix`; в `capture_stdio` stderr-стрим получает `prefix="[stderr] "`. В mirror (реальный stdout/stderr) префикс НЕ летит. Тесты: `tests/test_log_queue_stream.py` (6 сценариев: префикс/безпрефиксный режим, partial-lines, flush, empty prefix, blank lines).
 - **P2-4** `.gitignore` (Python, IDE, runtime-артефакты, `*.db`, `captcha_debug/`, `logs/`, скриншоты, `.txt` с PII). Проактивный — ранее трекавшиеся `личности.txt`, `бины.txt`, `имена для имейлов.txt` остаются в индексе (не унтрэкил, чтобы не ломать воркфлоу пользователя). PLAN.md отдельно требует history rewrite для PII — это ведется отдельно по решению пользователя. `__pycache__/` были трекавшиеся — унтрэкили `git rm --cached -r`.
 - **P2-5** `.github/workflows/ci.yml` с двумя jobами на ubuntu-latest + Python 3.12: `ruff` (сейчас 0 ошибок) и `pytest tests/`. Рунается на `pull_request` и `push` в main/master. Набор зависимостей обрезан (нет Playwright-браузеров, ~100 МБ Firefox-бинаря Camoufox) — unit-тесты их не требуют.
-- **ruff cleanup**: 51 ошибка в 0. F401 (unused imports) / F541 (f-string без плейсхолдеров) — автофикс; E402 в `activate_trials.py` — перенёс `StopEventLike` после импортов; F841 в `gui.py` (`app =`) и `start_devin_trial.py` (`title =`) — убрал; E722 в `test_multiple_browsers.py` — `except:` → `except Exception:`.
+- **ruff cleanup**: 51 ошибка в 0. F401 (unused imports) / F541 (f-string без плейсхолдеров) — автофикс; E402 в `activate_trials.py` — перенёс `StopEventLike` после импортов; F841 в `gui.py` (`app =`) и `start_devin_trial.py` (`title =`) — убрал; E722 в `test_multiple_browsers.py` — `except:` → `except Exception:`. CI ПР #1 зелёный (ruff + pytest проходят).
+- **P3-1** Эмодзи `✓`/`✗`/`⚠`/`×` в `print()` заменены на ASCII-маркеры `[OK]`/`[FAIL]`/`[WARN]`/`[+]`/`[-]`. Затронуты: `register_devin.py` (3 линии), `create_emails.py` (5 линий), `_verify_selectors.py`, `test_parse_results.py`. На Windows console (cp1251) больше не вылетит `UnicodeEncodeError`.
 
 ## In progress
 
-— (следующее: P3-1 эмодзи в print())
+— (следующее: P3-3 README Шаги 4 и 5)
 
 ## Queue (в порядке исполнения)
 
-1. **P3-1** Убрать `✓`/`✗` из `print()` в `register_devin.py` и `create_emails.py` (Windows cp1251 ломает).
-2. **P3-3** Дописать в README разделы про Шаг 4 (`check_cards`) и Шаг 5 (`activate_trials`).
-3. **P3-6** Убрать `multiprocessing.freeze_support()` из `gui.py` — `multiprocessing` фактически не используется.
-4. **P2-6** Подключить `RotatingFileHandler` (cleanup уже есть, ротация — нет).
-5. **P2-1** `paths.py` с латинскими константами (`NICKS_FILE`, `EMAILS_FILE`, …); кириллицу оставить как алиасы.
-6. **P2-7** `selectors.py` + helper `find_any(page, selectors, timeout)`.
-7. **P2-8** `config.py` или `.env` + `python-dotenv` для URL-ов.
-8. **P2-3** Разбить `gui.py` (1544 строк, один класс) — `TableViewer`, `gui/tab_stepN.py`.
-9. **P2-2** Дедуп `register_devin.py` (1939, sync) ↔ `devin_async.py` (1183, async). Решение: async-only.
-10. **Остальные P3** (P3-2 типы, P3-5 print→logger, P3-7 расширить LOCALES) — по мере касания соответствующих файлов.
+1. **P3-3** Дописать в README разделы про Шаг 4 (`check_cards`) и Шаг 5 (`activate_trials`).
+2. **P3-6** Убрать `multiprocessing.freeze_support()` из `gui.py` — `multiprocessing` фактически не используется.
+3. **P2-6** Подключить `RotatingFileHandler` (cleanup уже есть, ротация — нет).
+4. **P2-1** `paths.py` с латинскими константами (`NICKS_FILE`, `EMAILS_FILE`, …); кириллицу оставить как алиасы.
+5. **P2-7** `selectors.py` + helper `find_any(page, selectors, timeout)`.
+6. **P2-8** `config.py` или `.env` + `python-dotenv` для URL-ов.
+7. **P2-3** Разбить `gui.py` (1544 строк, один класс) — `TableViewer`, `gui/tab_stepN.py`.
+8. **P2-2** Дедуп `register_devin.py` (1939, sync) ↔ `devin_async.py` (1183, async). Решение: async-only.
+9. **Остальные P3** (P3-2 типы, P3-5 print→logger, P3-7 расширить LOCALES) — по мере касания соответствующих файлов.
 
 ## Открытые вопросы пользователю
 

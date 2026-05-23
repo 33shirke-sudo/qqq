@@ -632,7 +632,7 @@ def main(argv: list[str] | None = None) -> int:
                         db.add_email(email, password, nick)
                         db.mark_nick_done(nick)
                         ok += 1
-                        marker = "" if email.endswith(WANTED_SUFFIX) else "  ⚠ ДОМЕН НЕ ТОТ"
+                        marker = "" if email.endswith(WANTED_SUFFIX) else "  [WARN] ДОМЕН НЕ ТОТ"
                         logger.info(f"[{nick}] OK -> {email} : {password}{marker}")
                         print(f"  [{nick}] OK -> {email} : {password}{marker}")
                     elif result.taken:
@@ -690,21 +690,21 @@ def main(argv: list[str] | None = None) -> int:
                             db.add_email(email, password, nick)
                             db.mark_nick_done(nick)
                             ok += 1
-                            marker = "" if email.endswith(WANTED_SUFFIX) else "  ⚠"
-                            print(f"✓ {nick} -> {email}{marker}")
+                            marker = "" if email.endswith(WANTED_SUFFIX) else "  [WARN]"
+                            print(f"[OK] {nick} -> {email}{marker}")
                         elif success and error == "taken":
                             db.mark_nick_taken(nick)
                             db.mark_nick_taken_in_nicks(nick)
                             found_taken += 1
-                            print(f"✓ {nick} - ЗАНЯТ")
+                            print(f"[OK] {nick} - ЗАНЯТ")
                         else:
                             skipped += 1
-                            print(f"✗ {nick} - {error}")
+                            print(f"[FAIL] {nick} - {error}")
 
                     except Exception as exc:
                         skipped += 1
                         logger.exception(f"Ошибка при обработке future для {nick}")
-                        print(f"✗ {nick} - КРИТИЧЕСКАЯ ОШИБКА: {exc}")
+                        print(f"[FAIL] {nick} - КРИТИЧЕСКАЯ ОШИБКА: {exc}")
 
             except KeyboardInterrupt:
                 print("\nОстановка... Ждём завершения активных воркеров...")
