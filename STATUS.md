@@ -49,19 +49,19 @@
 - **P3-3** README дописан для Шага 4 (`check_cards.py`) и Шага 5 (`activate_trials.py`). Новые разделы покрывают входные файлы, ключевые флаги argparse для каждого скрипта, идемпотентность и взаимодействие с GUI-«Остановить». Заодно нормализовал README с CRLF на LF — были 204 CRLF-переноса.
 - **P3-6** Убран вызов `multiprocessing.freeze_support()` и импорт `multiprocessing` из `gui.py`. Код нигде не использует multiprocessing.Process (всё на ThreadPoolExecutor / asyncio.gather), а PyInstaller без freeze_support ведёт себя корректно.
 - **P2-6** `setup_logging` теперь использует `RotatingFileHandler(maxBytes=10 МБ, backupCount=5)` на `logs/qqq.log` (было `debug_YYYY-MM-DD_HH-MM-SS.log` на каждый запуск, рождая сотни файлов). Сессия помечается строкой `=== Сессия ... ===`. `cleanup_old_logs(days=30)` расширен: чистит и legacy `debug_*.log`, и ротационные `qqq.log.*` бэкапы; активный `qqq.log` не трогает. Тесты: `tests/test_logging_rotation.py` (3 сценария).
+- **P2-1** Новый `paths.py` — единственный источник рантайм-путей проекта: `NICKS_FILE`, `EMAILS_FILE`, `TAKEN_FILE`, `DEVIN_OK_FILE`, `DEVIN_ERRORS_FILE`, `IDENTITIES_FILE`, `BINS_FILE`, `LIVE_CARDS_FILE`, `CONFIRMED_LIVE_CARDS_FILE`, `DB_FILE`, `LOGS_DIR`, `SCREENSHOTS_DIR`, `CAPTCHA_DEBUG_DIR`, `TEMP_PROFILES_DIR`, `BROWSER_PROFILE_DIR`. Сами файлы на диске остаются с кириллическими именами (переименование сломало бы воркфлоу пользователей); но вся логика импортирует латинские имена. Модули переведены: `create_emails.py`, `register_devin.py`, `add_identities.py`, `check_cards.py`, `activate_trials.py`, `gui.py`. Старые алиасы (`RESULTS_PATH`, `DEVIN_DONE_PATH`, `IDENTITIES_PATH`, …) оставлены — на них завязаны внешние импорты и тесты. Тесты: `tests/test_paths.py` (3 сценария — типы, ROOT-эквивалентность, legacy-алиасы).
 
 ## In progress
 
-— (следующее: P2-1 paths.py + латинизация путей)
+— (следующее: P2-7 selectors.py + find_any)
 
 ## Queue (в порядке исполнения)
 
-1. **P2-1** `paths.py` с латинскими константами (`NICKS_FILE`, `EMAILS_FILE`, …); кириллицу оставить как алиасы.
-2. **P2-7** `selectors.py` + helper `find_any(page, selectors, timeout)`.
-3. **P2-8** `config.py` или `.env` + `python-dotenv` для URL-ов.
-4. **P2-3** Разбить `gui.py` (1544 строк, один класс) — `TableViewer`, `gui/tab_stepN.py`.
-5. **P2-2** Дедуп `register_devin.py` (1939, sync) ↔ `devin_async.py` (1183, async). Решение: async-only.
-6. **Остальные P3** (P3-2 типы, P3-5 print→logger, P3-7 расширить LOCALES) — по мере касания соответствующих файлов.
+1. **P2-7** `selectors.py` + helper `find_any(page, selectors, timeout)`.
+2. **P2-8** `config.py` или `.env` + `python-dotenv` для URL-ов.
+3. **P2-3** Разбить `gui.py` (1544 строк, один класс) — `TableViewer`, `gui/tab_stepN.py`.
+4. **P2-2** Дедуп `register_devin.py` (1939, sync) ↔ `devin_async.py` (1183, async). Решение: async-only.
+5. **Остальные P3** (P3-2 типы, P3-5 print→logger, P3-7 расширить LOCALES) — по мере касания соответствующих файлов.
 
 ## Открытые вопросы пользователю
 

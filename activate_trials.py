@@ -57,6 +57,7 @@ from devin_async import (
     select_card_payment_method_async,
 )
 from logging_utils import setup_logging
+from paths import DB_FILE, TEMP_PROFILES_DIR
 from register_devin import Account, StepError
 from storage import AccountDB
 
@@ -65,9 +66,8 @@ from storage import AccountDB
 # выставлять из main-треда Tk), в тестах/CLI удобнее asyncio.Event.
 StopEventLike = Union[threading.Event, asyncio.Event]
 
-ROOT = Path(__file__).resolve().parent
-DB_PATH = ROOT / "accounts.db"
-TEMP_PROFILES_DIR = ROOT / "temp_profiles"
+# P2-1: пути в paths.py.
+DB_PATH = DB_FILE
 
 # Сколько секунд ждать /dashboard после submit + hCaptcha.
 _DASHBOARD_WAIT_S = 60.0

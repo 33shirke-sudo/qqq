@@ -50,14 +50,25 @@ from playwright.sync_api import Page, TimeoutError as PWTimeout, sync_playwright
 
 from browser_modes import add_browser_mode_arg, launch_browser
 from logging_utils import setup_logging, log_step, log_exception, log_timing
+from paths import (
+    CAPTCHA_DEBUG_DIR,
+    DB_FILE,
+    DEVIN_ERRORS_FILE,
+    DEVIN_OK_FILE,
+    EMAILS_FILE,
+    IDENTITIES_FILE,
+    NICKS_FILE,
+    TAKEN_FILE,
+)
 from storage import AccountDB
 
-ROOT = Path(__file__).parent
-NICKS_PATH = ROOT / "имена для имейлов.txt"
-RESULTS_PATH = ROOT / "имейлы pingmx.txt"
-TAKEN_PATH = ROOT / "taken.txt"
-DB_PATH = ROOT / "accounts.db"
-DEBUG_DIR = ROOT / "captcha_debug"
+# P2-1: латинские канонические имена в paths.py; старые алиасы
+# оставлены не ломать внешние импорты (есть в тестах).
+NICKS_PATH = NICKS_FILE
+RESULTS_PATH = EMAILS_FILE
+TAKEN_PATH = TAKEN_FILE
+DB_PATH = DB_FILE
+DEBUG_DIR = CAPTCHA_DEBUG_DIR
 URL = "https://www.pinmx.com/ru"
 WANTED_SUFFIX = "@pingmx.com"
 
@@ -572,9 +583,9 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("Импорт существующих данных из .txt файлов...")
         counts = db.import_from_txt_files(
             RESULTS_PATH, TAKEN_PATH,
-            ROOT / "аккаунты devin.txt",
-            ROOT / "devin_errors.txt",
-            ROOT / "личности.txt"
+            DEVIN_OK_FILE,
+            DEVIN_ERRORS_FILE,
+            IDENTITIES_FILE,
         )
         logger.info(f"Импортировано: {counts}")
         print(f"Импортировано из .txt файлов: {counts}")

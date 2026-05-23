@@ -31,6 +31,14 @@ from playwright.sync_api import (
 
 from browser_modes import add_browser_mode_arg
 from logging_utils import setup_logging, log_exception
+from paths import (
+    DB_FILE,
+    DEVIN_ERRORS_FILE,
+    DEVIN_OK_FILE,
+    EMAILS_FILE,
+    IDENTITIES_FILE,
+    TAKEN_FILE,
+)
 from storage import AccountDB
 
 
@@ -38,14 +46,13 @@ from storage import AccountDB
 # Пути
 # ---------------------------------------------------------------------------
 
-# Все рантайм-файлы лежат рядом со скриптом, чтобы CLI работал одинаково
-# и из ``.\register_devin.py``, и из ``python -m register_devin``.
-ROOT = Path(__file__).parent
-RESULTS_PATH = ROOT / "имейлы pingmx.txt"
-DEVIN_DONE_PATH = ROOT / "аккаунты devin.txt"
-DEVIN_ERRORS_PATH = ROOT / "devin_errors.txt"
-IDENTITIES_PATH = ROOT / "личности.txt"
-DB_PATH = ROOT / "accounts.db"
+# P2-1: имена в paths.py; старые алиасы оставлены — этот модуль
+# важно не ломать (1939 строк, вся Devin-логика).
+RESULTS_PATH = EMAILS_FILE
+DEVIN_DONE_PATH = DEVIN_OK_FILE
+DEVIN_ERRORS_PATH = DEVIN_ERRORS_FILE
+IDENTITIES_PATH = IDENTITIES_FILE
+DB_PATH = DB_FILE
 
 
 # ---------------------------------------------------------------------------
@@ -1748,7 +1755,7 @@ def main(argv: list[str] | None = None) -> int:
     if not DB_PATH.exists() or DB_PATH.stat().st_size == 0:
         logger.info("Импорт существующих данных из .txt файлов...")
         counts = db.import_from_txt_files(
-            RESULTS_PATH, ROOT / "taken.txt",
+            RESULTS_PATH, TAKEN_FILE,
             DEVIN_DONE_PATH, DEVIN_ERRORS_PATH, IDENTITIES_PATH
         )
         logger.info(f"Импортировано: {counts}")

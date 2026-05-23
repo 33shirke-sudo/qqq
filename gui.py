@@ -10,6 +10,18 @@ from tkinter import ttk, scrolledtext, messagebox
 import threading
 import queue
 from pathlib import Path
+
+from paths import (
+    DB_FILE,
+    DEVIN_ERRORS_FILE,
+    DEVIN_OK_FILE,
+    EMAILS_FILE,
+    IDENTITIES_FILE,
+    LIVE_CARDS_FILE,
+    NICKS_FILE as PATHS_NICKS_FILE,
+    TAKEN_FILE,
+    BINS_FILE,
+)
 from storage import AccountDB
 import pipeline_runner
 
@@ -29,8 +41,10 @@ _BROWSER_PROC_NAMES = (
     "playwright", "playwright.exe",
 )
 
-DB_PATH = Path(__file__).parent / "accounts.db"
-NICKS_FILE = Path(__file__).parent / "имена для имейлов.txt"
+# P2-1: пути в paths.py. Оставлены имена-алиасы для совместимости
+# с внешними импортами (есть, например, в тестах).
+DB_PATH = DB_FILE
+NICKS_FILE = PATHS_NICKS_FILE
 
 LOCALES = {
     "Южная Корея": "ko_KR",
@@ -1018,14 +1032,13 @@ class PipelineGUI:
         ручные правки ``.txt``-файлов игнорируются — пользователь должен
         иметь возможность принудительно их перезалить.
         """
-        root = Path(__file__).parent
         try:
             counts = self._db.import_from_txt_files(
-                root / "имейлы pingmx.txt",
-                root / "taken.txt",
-                root / "аккаунты devin.txt",
-                root / "devin_errors.txt",
-                root / "личности.txt",
+                EMAILS_FILE,
+                TAKEN_FILE,
+                DEVIN_OK_FILE,
+                DEVIN_ERRORS_FILE,
+                IDENTITIES_FILE,
             )
         except Exception as exc:  # noqa: BLE001 — GUI showerror, не падаем
             messagebox.showerror("Ошибка импорта", f"Не удалось импортировать .txt:\n{exc}")
@@ -1076,8 +1089,8 @@ class PipelineGUI:
                 self.label3.config(text=f"{done_ids}/{total_ids}")
 
             # Step 4: Check Cards
-            bins_file = Path(__file__).parent / "бины.txt"
-            live_cards_file = Path(__file__).parent / "живые карты.txt"
+            bins_file = BINS_FILE
+            live_cards_file = LIVE_CARDS_FILE
             if bins_file.exists():
                 total_bins = len([line.strip() for line in bins_file.read_text(encoding='utf-8').splitlines() if line.strip() and not line.startswith('#')])
                 if live_cards_file.exists():
@@ -1645,13 +1658,12 @@ class PipelineGUI:
     def export_txt(self):
         try:
             db = self._db
-            base_path = Path(__file__).parent
 
-            count_emails = db.export_emails_txt(base_path / "имейлы pingmx.txt")
-            count_taken = db.export_taken_txt(base_path / "taken.txt")
-            count_devin = db.export_devin_accounts_txt(base_path / "аккаунты devin.txt")
-            count_errors = db.export_devin_errors_txt(base_path / "devin_errors.txt")
-            count_identities = db.export_identities_txt(base_path / "личности.txt")
+            count_emails = db.export_emails_txt(EMAILS_FILE)
+            count_taken = db.export_taken_txt(TAKEN_FILE)
+            count_devin = db.export_devin_accounts_txt(DEVIN_OK_FILE)
+            count_errors = db.export_devin_errors_txt(DEVIN_ERRORS_FILE)
+            count_identities = db.export_identities_txt(IDENTITIES_FILE)
 
 
             messagebox.showinfo("Экспорт завершён",

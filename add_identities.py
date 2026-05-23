@@ -44,17 +44,18 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 from typing import Iterable
 
 from faker import Faker
 
 from logging_utils import setup_logging
-from register_devin import IDENTITIES_PATH
+from paths import DB_FILE, IDENTITIES_FILE, ROOT  # noqa: F401 — ROOT исторически экспортируется отсюда
 from storage import AccountDB
 
-ROOT = Path(__file__).resolve().parent
-DB_PATH = ROOT / "accounts.db"
+# P2-1: алиасы для совместимости. Раньше IDENTITIES_PATH импортировался
+# из register_devin — теперь все модули берут одно и то же из paths.
+IDENTITIES_PATH = IDENTITIES_FILE
+DB_PATH = DB_FILE
 DEFAULT_LOCALE = "el_GR"
 
 

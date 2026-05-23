@@ -56,6 +56,12 @@ from playwright.async_api import (
 )
 
 from browser_modes import VALID_MODES, DEFAULT_MODE, launch_browser_async
+from paths import (
+    BINS_FILE,
+    CONFIRMED_LIVE_CARDS_FILE,
+    DB_FILE,
+    LIVE_CARDS_FILE,
+)
 from storage import AccountDB
 
 
@@ -63,11 +69,11 @@ from storage import AccountDB
 # Константы
 # ---------------------------------------------------------------------------
 
-ROOT = Path(__file__).parent
-BINS_PATH = ROOT / "бины.txt"
-LIVE_CARDS_PATH = ROOT / "живые карты.txt"
-CONFIRMED_LIVE_CARDS_PATH = ROOT / "подтверждённые живые карты.txt"
-DB_PATH = ROOT / "accounts.db"
+# P2-1: имена в paths.py; алиасы для старого кода.
+BINS_PATH = BINS_FILE
+LIVE_CARDS_PATH = LIVE_CARDS_FILE
+CONFIRMED_LIVE_CARDS_PATH = CONFIRMED_LIVE_CARDS_FILE
+DB_PATH = DB_FILE
 CHKR_URL = "https://chkr.cc/"
 
 # Селекторы chkr.cc, зафиксированные исследованием через Playwright MCP.
