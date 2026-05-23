@@ -1,0 +1,8 @@
+playwright>=1.59,<2
+ddddocr>=1.6,<2
+faker>=24.0.0,<25
+hypothesis>=6,<7
+# Camoufox — patched Firefox для прохождения hCaptcha (Шаг 5: activate_trials).
+# Установка тянет patched-бинарь Firefox (~100 МБ) — первая загрузка через
+# `python -m camoufox fetch`.
+camoufox>=0.4
