@@ -14,10 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
 from typing import Awaitable, Callable
 
-import ddddocr
 from playwright.async_api import (
     BrowserContext,
     Page,
@@ -26,19 +24,25 @@ from playwright.async_api import (
 
 from logging_utils import log_step, log_exception, log_timing
 
-# Переиспользуем все константы (URL'ы, селекторы) из синхронного модуля —
-# они одинаково применимы и для async API.
-from register_devin import (
+# P2-2: общие типы/хелперы — из devin_common (раньше дублировались).
+from devin_common import (
     Account,
+    InvalidCodeError,
+    StepError,
+    extract_code,
+    find_identity_for_email as _common_find_identity_for_email,
+    get_ocr as _get_ocr,
+)
+
+# URL/селекторы mail-client — всё ещё из register_devin (они связаны
+# с sync-реализацией, но одинаковые в sync/async).
+from register_devin import (
     MAIL_LOGIN_URL,
     MAIL_INBOX_URL_HASH,
     MAIL_LIST_ITEM_SELECTOR,
     MAIL_REFRESH_BUTTON_SELECTOR,
     MAIL_DETAIL_BODY_SELECTOR,
     MAIL_DETAIL_BODY_FALLBACK_SELECTORS,
-    StepError,
-    InvalidCodeError,
-    extract_code,
     IDENTITIES_PATH,
 )
 
@@ -84,16 +88,7 @@ _MAIL_CLICK_TIMEOUT_MS = 2_000
 _MAIL_LIST_WAIT_TIMEOUT_MS = 5_000
 _MAIL_BODY_READ_TIMEOUT_MS = 3_000
 
-_ocr: ddddocr.DdddOcr | None = None
-
-
-def _get_ocr() -> ddddocr.DdddOcr:
-    global _ocr
-    if _ocr is None:
-        instance = ddddocr.DdddOcr(show_ad=False)
-        instance.set_ranges("0123456789")
-        _ocr = instance
-    return _ocr
+# P2-2: _get_ocr() — из devin_common (выше импорт под алиасом).
 
 
 # ---------------------------------------------------------------------------
@@ -838,34 +833,15 @@ async def _login_to_devin_async_once(
 # Identity helper
 # ---------------------------------------------------------------------------
 
-
-@dataclass(frozen=True)
-class Identity:
-    full_name: str
-    street: str
-    zip_code: str
-    city: str
+# P2-2: Identity / find_identity_for_email живут в devin_common.
+# Здесь — тонкий wrapper, чтобы старый внешний API (Identity, find_identity_for_email
+# из devin_async) продолжал работать; код берёт IDENTITIES_PATH (alias на
+# paths.IDENTITIES_FILE) и форвардит в devin_common.
+from devin_common import Identity  # noqa: F401,E402
 
 
 def find_identity_for_email(email: str) -> Identity | None:
-    if not IDENTITIES_PATH.exists():
-        return None
-    target = email.lower()
-    for raw in IDENTITIES_PATH.read_text(encoding="utf-8").splitlines():
-        line = raw.rstrip("\r")
-        if not line.strip() or line.lstrip().startswith("#") or "\t" not in line:
-            continue
-        e, identity_str = line.split("\t", 1)
-        if e.strip().lower() != target:
-            continue
-        parts = [p.strip() for p in identity_str.strip().split(",")]
-        if len(parts) != 4:
-            return None
-        full_name, street, zip_code, city = parts
-        if not (full_name and street and zip_code and city):
-            return None
-        return Identity(full_name=full_name, street=street, zip_code=zip_code, city=city)
-    return None
+    return _common_find_identity_for_email(email, identities_path=IDENTITIES_PATH)
 
 
 # ---------------------------------------------------------------------------

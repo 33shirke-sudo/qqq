@@ -49,6 +49,8 @@
 - **P3-3** README дописан для Шага 4 (`check_cards.py`) и Шага 5 (`activate_trials.py`). Новые разделы покрывают входные файлы, ключевые флаги argparse для каждого скрипта, идемпотентность и взаимодействие с GUI-«Остановить». Заодно нормализовал README с CRLF на LF — были 204 CRLF-переноса.
 - **P3-6** Убран вызов `multiprocessing.freeze_support()` и импорт `multiprocessing` из `gui.py`. Код нигде не использует multiprocessing.Process (всё на ThreadPoolExecutor / asyncio.gather), а PyInstaller без freeze_support ведёт себя корректно.
 - **P2-6** `setup_logging` теперь использует `RotatingFileHandler(maxBytes=10 МБ, backupCount=5)` на `logs/qqq.log` (было `debug_YYYY-MM-DD_HH-MM-SS.log` на каждый запуск, рождая сотни файлов). Сессия помечается строкой `=== Сессия ... ===`. `cleanup_old_logs(days=30)` расширен: чистит и legacy `debug_*.log`, и ротационные `qqq.log.*` бэкапы; активный `qqq.log` не трогает. Тесты: `tests/test_logging_rotation.py` (3 сценария).
+- **P2-2** (часть 1: общий модуль devin_common) `register_devin.py` (sync, 1951) и `devin_async.py` (async, 1185) дублировали ~10 общих сущностей, не связанных с sync/async Playwright. Новый `devin_common.py` (348 строк) — единый источник: `Account`, `parse_account`, `load_accounts`, `load_done`, `_flush_to_disk`, `append_done`, `append_error`, `extract_code`/`_SIX_DIGIT_CODE_RE`, `get_ocr` (был `_get_ocr`), иерархия `RegistrationError`/`StepError`/`InvalidCodeError`, `Identity`/`parse_identity`/`find_identity_for_email`. `register_devin`, `devin_async`, `start_devin_trial` импортируют эти имена из `devin_common`; внешние модули (`activate_trials`, `find_and_pay`, `test_*`, `tests/`) продолжают импортировать из register_devin / devin_async — реэкспорт сохранён. Итого: `register_devin` 1951→1745 (−2%), `devin_async` 1185→1161 (−24), `start_devin_trial` 771→734 (−37). Тесты: `tests/test_devin_common.py` (13 сценариев) + существующие property-тесты (test_parse_account_property, test_extract_code_property, test_done_tracking_property) продолжают проходить без изменений (re-export работает).
+
 - **P2-3** (часть 1: TableViewer) Новый `gui_table_viewer.py` — класс `TableViewer`, инкапсулирующий Toplevel + Treeview + scrollbar + статусная лейбл + кнопки Обновить/Закрыть. Раньше в gui.py было 6 пар `show_X` / `refresh_X_view` (525 строк дублирующейся логики): database, emails, devin accounts, identities, live_cards, activated_trials — каждый пересоздавал виджеты вручную. Теперь show_X — вызов `TableViewer(...)` с (title, geometry, columns=[(key, header, width), …], loader, status_text). gui.py: 1690 → 1405 строк (−285). Данные подходят в каждом case из sqlite через `_load_*_rows()`-helper'ы. Тесты: `tests/test_gui_table_viewer.py` (5 сценариев — init, refresh, status, exception handling, optional status).
 - **P2-8** Новый `config.py` — URL-ы и runtime-настройки в одном месте с возможностью переопределения через ENV `QQQ_*`. Константы: `DEVIN_LOGIN_URL`, `DEVIN_SIGNUP_URL`, `DEVIN_APP_BASE_URL`, `PINMX_URL`, `MAIL_LOGIN_URL`, `CHKR_URL`, `STRIPE_CHECKOUT_PREFIX`. Опциональная подгрузка `.env` через `python-dotenv` (добавлен в requirements.txt; без него конфиг работает на shell-ENV). `.env.example` в репо как шаблон. Модули переведены: `register_devin.py` (`MAIL_LOGIN_URL`, `DEVIN_SIGNUP_URL`), `create_emails.py` (`URL`), `check_cards.py` (`CHKR_URL`), `devin_async.py` (`DEVIN_LOGIN_URL` + Stripe-prefix в hCaptcha-детекторе), `start_devin_trial.py` (то же). Тесты: `tests/test_config.py` (4 сценария — дефолты, оверрайд, partial-оверрайд, dotenv-опциональность).
 - **P2-7** Новый `selectors_.py` (имя с хвостовым `_` — чтобы не перекрывать stdlib `selectors`): по кортежу селекторов на каждую логическую точку по сервисам (chkr.cc, rainloop, Stripe). + helper'ы `find_any(page, selectors, timeout)` (sync), `find_any_async(...)` (async), `wait_for_any_async(...)` — poll-версия. `check_cards.py` и `activate_accounts.py` переведены на новый реестр (алиасы сохранены). `open_chkr` теперь ждёт START-кнопку через `find_any_async` с fallback'ами. Тесты: `tests/test_selectors.py` (22 сценария — visibility, exceptions, async, timeout, плюс parametrize по всем кортежам).
@@ -56,13 +58,12 @@
 
 ## In progress
 
-— (следующее: P2-2 дедуп register_devin/devin_async)
+— (основная очередь PLAN.md закрыта; остаются полировки P3-2/P3-5/P3-7)
 
 ## Queue (в порядке исполнения)
 
-1. **P2-2** Дедуп `register_devin.py` (1939, sync) ↔ `devin_async.py` (1183, async). Решение: async-only.
-2. **P2-2** Дедуп `register_devin.py` (1939, sync) ↔ `devin_async.py` (1183, async). Решение: async-only.
-3. **Остальные P3** (P3-2 типы, P3-5 print→logger, P3-7 расширить LOCALES) — по мере касания соответствующих файлов.
+1. **P2-2 (часть 2, опционально)** async-only переписывание `register_devin.main` — рискованно без живого теста (Шаг 2 пайплайна). Сейчас `pipeline_runner` вызывает `register_devin.main` (sync), и это работает. Шарированный код вынесен в `devin_common` — этого достаточно для обслуживаемости.
+2. **Остальные P3** (P3-2 типы, P3-5 print→logger, P3-7 расширить LOCALES) — по мере касания соответствующих файлов.
 
 ## Открытые вопросы пользователю
 
